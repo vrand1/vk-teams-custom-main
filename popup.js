@@ -2,14 +2,14 @@
 (function() {
     'use strict';
 
-    // Preset definitions
-    const PRESETS = {
-        'default': ['👍', '🤡', '🤦', '🔥', '💩', '✨'],
-        'work': ['✅', '❌', '⚠️', '📌', '💡', '🎯'],
-        'positive': ['❤️', '😂', '😍', '🎉', '👏', '🔥'],
-        'emotions': ['😊', '😢', '😮', '😡', '🤔', '😴'],
-        'memes': ['🤡', '💀', '🗿', '☠️', '👁️', '🤨']
-    };
+    const BUILTIN_REACTIONS = ['🤨', '🙄', '🥱', '😭', '🥶', '🤮', '🥺', '💀', '🦧', '🔇'];
+    const MAX_REACTIONS_PER_SET = 30;
+    const MAX_REACTION_SETS = 20;
+
+    let reactionSetsCache = [];
+    let activeReactionSetIdCache = null;
+    /** @type {null|string} null — редактор скрыт; 'new' — создание; иначе id набора */
+    let editingSetId = null;
 
     function tabEffectiveUrl(tab) {
         if (!tab) {
@@ -104,78 +104,343 @@
         }
     }
 
-    // Load current preset
-    function loadCurrentPreset() {
-        chrome.storage.sync.get(['selectedPreset'], (result) => {
-            const currentPreset = result.selectedPreset || 'default';
-            console.log('[VK Teams Reactions Settings] Current preset:', currentPreset);
+    async function getActiveTeamsTab() {
+        try {
+            const tabs = await getAllTeamsTabs();
+            if (tabs.length === 0) {
+                return null;
+            }
 
-            // Update preview
-            updatePreview(currentPreset);
+            const focused = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            const focusedUrl = tabEffectiveUrl(focused[0]);
+            if (focused[0] && isMessengerTabUrl(focusedUrl)) {
+                const match = tabs.find((t) => t.id === focused[0].id);
+                if (match) {
+                    return match;
+                }
+            }
 
-            // Highlight active card
-            updateActiveCard(currentPreset);
-        });
+            const activeMessenger = tabs.find((t) => t.active === true);
+            if (activeMessenger) {
+                return activeMessenger;
+            }
+
+            const withLast = tabs.filter((t) => typeof t.lastAccessed === 'number');
+            if (withLast.length > 0) {
+                withLast.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+                return withLast[0];
+            }
+
+            return tabs[0];
+        } catch (error) {
+            console.error('[VK Teams] Error getting active tab:', error);
+            return null;
+        }
     }
 
-    // Update preview display
-    function updatePreview(presetName) {
-        const reactions = PRESETS[presetName];
+    function reactionsToInputString(reactions) {
+        if (!Array.isArray(reactions) || !reactions.length) {
+            return '';
+        }
+        return reactions.join(' ');
+    }
+
+    function parseReactionsFromInput(text) {
+        const trimmed = (text || '').trim();
+        if (!trimmed) {
+            return null;
+        }
+        if (/[\s,;|]/.test(trimmed)) {
+            const list = trimmed.split(/[\s,;|]+/).map((s) => s.trim()).filter(Boolean);
+            return list.length ? list : null;
+        }
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            const seg = new Intl.Segmenter('ru', { granularity: 'grapheme' });
+            const list = [...seg.segment(trimmed)].map((s) => s.segment).filter(Boolean);
+            return list.length ? list : null;
+        }
+        return [...trimmed];
+    }
+
+    function showReactionsStatus(message, type) {
+        const statusDiv = document.getElementById('reactionsStatusMessage');
+        if (!statusDiv) {
+            return;
+        }
+        statusDiv.textContent = message;
+        statusDiv.className = 'status-message ' + type;
+        if (type === 'success') {
+            setTimeout(() => {
+                statusDiv.className = 'status-message';
+            }, 3000);
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
+    }
+
+    function createReactionSetId() {
+        return 'set_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    }
+
+    function getActiveReactionSet() {
+        if (!reactionSetsCache.length) {
+            return null;
+        }
+        return reactionSetsCache.find((s) => s.id === activeReactionSetIdCache) || reactionSetsCache[0];
+    }
+
+    function updatePreviewFromReactions(reactions, setName) {
         const previewElement = document.getElementById('currentPreview');
-
-        if (reactions && previewElement) {
-            previewElement.innerHTML = reactions.map(emoji =>
-                `<span>${emoji}</span>`
-            ).join('');
+        if (previewElement && Array.isArray(reactions)) {
+            previewElement.innerHTML = reactions.map((emoji) => `<span>${emoji}</span>`).join('');
+        }
+        const nameEl = document.getElementById('activeSetName');
+        if (nameEl) {
+            nameEl.textContent = setName || '—';
         }
     }
 
-    // Update active card styling
-    function updateActiveCard(presetName) {
-        // Remove active class from all cards
-        document.querySelectorAll('.preset-card').forEach(card => {
-            card.classList.remove('active');
-            const checkIcon = card.querySelector('.check-icon');
-            if (checkIcon) {
-                checkIcon.style.display = 'none';
+    function persistReactionSets(sets, activeId, activeReactions, done) {
+        chrome.storage.sync.set({
+            reactionSets: sets,
+            activeReactionSetId: activeId,
+            customReactions: activeReactions
+        }, done);
+    }
+
+    function migrateReactionStorage(result) {
+        if (Array.isArray(result.reactionSets) && result.reactionSets.length > 0) {
+            return {
+                sets: result.reactionSets.filter((s) => s && s.id && Array.isArray(s.reactions)),
+                activeId: result.activeReactionSetId || result.reactionSets[0].id
+            };
+        }
+        let reactions = BUILTIN_REACTIONS.slice();
+        if (result.customReactions && Array.isArray(result.customReactions) && result.customReactions.length) {
+            reactions = result.customReactions;
+        }
+        const id = 'set_default';
+        return {
+            sets: [{ id: id, name: 'Основной', reactions: reactions }],
+            activeId: id,
+            migrated: true
+        };
+    }
+
+    function renderReactionSetsList() {
+        const list = document.getElementById('reactionSetsList');
+        if (!list) {
+            return;
+        }
+        list.innerHTML = '';
+
+        reactionSetsCache.forEach((set) => {
+            const card = document.createElement('div');
+            const isActive = set.id === activeReactionSetIdCache;
+            card.className = 'preset-card reaction-set-card' + (isActive ? ' active' : '');
+            card.dataset.setId = set.id;
+
+            const emojisHtml = (set.reactions || [])
+                .map((emoji) => `<span>${escapeHtml(emoji)}</span>`)
+                .join('');
+
+            card.innerHTML = `
+                <div class="preset-name">
+                    <span>${escapeHtml(set.name || 'Без названия')}</span>
+                    <span class="check-icon" style="${isActive ? '' : 'display: none;'}">✓</span>
+                </div>
+                <div class="preset-emojis">${emojisHtml}</div>
+                <div class="reaction-set-actions">
+                    <button type="button" class="set-action-btn" data-action="edit" data-id="${escapeHtml(set.id)}">Изменить</button>
+                    <button type="button" class="set-action-btn set-action-delete" data-action="delete" data-id="${escapeHtml(set.id)}">Удалить</button>
+                </div>
+            `;
+
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.reaction-set-actions')) {
+                    return;
+                }
+                activateReactionSet(set.id);
+            });
+
+            card.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+                e.stopPropagation();
+                openReactionSetEditor(set.id);
+            });
+
+            card.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteReactionSet(set.id);
+            });
+
+            list.appendChild(card);
+        });
+    }
+
+    function loadReactionSets() {
+        chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
+            const migrated = migrateReactionStorage(result);
+            reactionSetsCache = migrated.sets;
+            activeReactionSetIdCache = migrated.activeId;
+
+            if (!reactionSetsCache.some((s) => s.id === activeReactionSetIdCache)) {
+                activeReactionSetIdCache = reactionSetsCache[0].id;
+            }
+
+            const persistMigrated = () => {
+                const active = getActiveReactionSet();
+                updatePreviewFromReactions(active.reactions, active.name);
+                renderReactionSetsList();
+            };
+
+            if (migrated.migrated) {
+                const active = getActiveReactionSet();
+                persistReactionSets(reactionSetsCache, activeReactionSetIdCache, active.reactions, persistMigrated);
+            } else {
+                persistMigrated();
             }
         });
+    }
 
-        // Add active class to current card
-        const activeCard = document.querySelector(`[data-preset="${presetName}"]`);
-        if (activeCard) {
-            activeCard.classList.add('active');
-            const checkIcon = activeCard.querySelector('.check-icon');
-            if (checkIcon) {
-                checkIcon.style.display = 'inline';
+    function openReactionSetEditor(setId) {
+        editingSetId = setId;
+        const editor = document.getElementById('reactionSetEditor');
+        const nameInput = document.getElementById('reactionSetNameInput');
+        const reactionsInput = document.getElementById('reactionSetReactionsInput');
+        const deleteBtn = document.getElementById('deleteReactionSetButton');
+
+        if (!editor || !nameInput || !reactionsInput) {
+            return;
+        }
+
+        if (setId === 'new') {
+            nameInput.value = '';
+            reactionsInput.value = reactionsToInputString(BUILTIN_REACTIONS);
+            if (deleteBtn) {
+                deleteBtn.style.display = 'none';
             }
+        } else {
+            const set = reactionSetsCache.find((s) => s.id === setId);
+            if (!set) {
+                return;
+            }
+            nameInput.value = set.name || '';
+            reactionsInput.value = reactionsToInputString(set.reactions);
+            if (deleteBtn) {
+                deleteBtn.style.display = reactionSetsCache.length > 1 ? 'inline-block' : 'none';
+            }
+        }
+
+        editor.style.display = 'block';
+        nameInput.focus();
+    }
+
+    function closeReactionSetEditor() {
+        editingSetId = null;
+        const editor = document.getElementById('reactionSetEditor');
+        if (editor) {
+            editor.style.display = 'none';
         }
     }
 
-    // Save preset selection
-    function savePreset(presetName) {
-        const reactions = PRESETS[presetName];
+    function activateReactionSet(setId) {
+        const set = reactionSetsCache.find((s) => s.id === setId);
+        if (!set) {
+            return;
+        }
+        activeReactionSetIdCache = setId;
+        persistReactionSets(reactionSetsCache, setId, set.reactions, () => {
+            updatePreviewFromReactions(set.reactions, set.name);
+            renderReactionSetsList();
+            showReactionsStatus('✅ Набор «' + set.name + '» активен', 'success');
+            notifyTabsReactions(set.reactions);
+        });
+    }
 
-        chrome.storage.sync.set({
-            selectedPreset: presetName,
-            customReactions: reactions
-        }, () => {
-            console.log('[VK Teams Reactions Settings] Preset saved:', presetName);
+    function saveReactionSetFromEditor() {
+        const nameInput = document.getElementById('reactionSetNameInput');
+        const reactionsInput = document.getElementById('reactionSetReactionsInput');
+        const name = (nameInput ? nameInput.value : '').trim() || 'Без названия';
+        const reactions = parseReactionsFromInput(reactionsInput ? reactionsInput.value : '');
 
-            // Update UI
-            updatePreview(presetName);
-            updateActiveCard(presetName);
+        if (!reactions || !reactions.length) {
+            showReactionsStatus('Добавьте хотя бы один эмодзи', 'error');
+            return;
+        }
+        const limited = reactions.slice(0, MAX_REACTIONS_PER_SET);
 
-            // Notify content script to reload reactions
-            getAllTeamsTabs().then(tabs => {
-                tabs.forEach(tab => {
-                    chrome.tabs.sendMessage(tab.id, {
-                        action: 'reloadReactions',
-                        reactions: reactions
-                    }).catch(err => {
-                        // Ignore errors for tabs where content script isn't loaded
-                        console.log('[VK Teams Reactions Settings] Tab not ready:', tab.id);
-                    });
+        if (editingSetId === 'new') {
+            if (reactionSetsCache.length >= MAX_REACTION_SETS) {
+                showReactionsStatus('Максимум ' + MAX_REACTION_SETS + ' наборов', 'error');
+                return;
+            }
+            const newSet = { id: createReactionSetId(), name: name, reactions: limited };
+            reactionSetsCache.push(newSet);
+            activeReactionSetIdCache = newSet.id;
+        } else {
+            const idx = reactionSetsCache.findIndex((s) => s.id === editingSetId);
+            if (idx === -1) {
+                return;
+            }
+            reactionSetsCache[idx] = {
+                ...reactionSetsCache[idx],
+                name: name,
+                reactions: limited
+            };
+        }
+
+        const active = getActiveReactionSet();
+        persistReactionSets(reactionSetsCache, activeReactionSetIdCache, active.reactions, () => {
+            closeReactionSetEditor();
+            updatePreviewFromReactions(active.reactions, active.name);
+            renderReactionSetsList();
+            showReactionsStatus('✅ Набор сохранён', 'success');
+            notifyTabsReactions(active.reactions);
+        });
+    }
+
+    function deleteReactionSet(setId) {
+        if (reactionSetsCache.length <= 1) {
+            showReactionsStatus('Нельзя удалить единственный набор', 'error');
+            return;
+        }
+        const set = reactionSetsCache.find((s) => s.id === setId);
+        if (!set) {
+            return;
+        }
+        if (!confirm('Удалить набор «' + set.name + '»?')) {
+            return;
+        }
+
+        reactionSetsCache = reactionSetsCache.filter((s) => s.id !== setId);
+        if (activeReactionSetIdCache === setId) {
+            activeReactionSetIdCache = reactionSetsCache[0].id;
+        }
+        if (editingSetId === setId) {
+            closeReactionSetEditor();
+        }
+
+        const active = getActiveReactionSet();
+        persistReactionSets(reactionSetsCache, activeReactionSetIdCache, active.reactions, () => {
+            updatePreviewFromReactions(active.reactions, active.name);
+            renderReactionSetsList();
+            showReactionsStatus('Набор удалён', 'success');
+            notifyTabsReactions(active.reactions);
+        });
+    }
+
+    function notifyTabsReactions(reactions) {
+        getAllTeamsTabs().then((tabs) => {
+            tabs.forEach((tab) => {
+                chrome.tabs.sendMessage(tab.id, {
+                    action: 'reloadReactions',
+                    reactions: reactions
+                }).catch(() => {
+                    console.log('[VK Teams Reactions Settings] Tab not ready:', tab.id);
                 });
             });
         });
@@ -296,21 +561,8 @@
         }
     }
 
-    function loadRapiConnectionSettings() {
-        chrome.storage.sync.get(['rapiBaseUrl', 'rapiApiVersion'], (r) => {
-            const urlEl = document.getElementById('rapiBaseUrl');
-            const verEl = document.getElementById('rapiApiVersion');
-            if (urlEl) {
-                urlEl.value = (r.rapiBaseUrl && r.rapiBaseUrl.trim()) ? r.rapiBaseUrl.trim() : '';
-            }
-            if (verEl) {
-                verEl.value = (r.rapiApiVersion != null && String(r.rapiApiVersion).trim()) ? String(r.rapiApiVersion).trim() : '';
-            }
-        });
-    }
-
-    function showRapiStatus(message, type) {
-        const statusDiv = document.getElementById('rapiStatusMessage');
+    function showConnectionStatus(message, type) {
+        const statusDiv = document.getElementById('connectionStatusMessage');
         if (!statusDiv) {
             return;
         }
@@ -323,9 +575,68 @@
         }
     }
 
-    function saveRapiConnectionSettings() {
+    function loadConnectionSettings() {
+        chrome.storage.sync.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], (r) => {
+            const aimsidEl = document.getElementById('customAimsid');
+            const urlEl = document.getElementById('rapiBaseUrl');
+            const verEl = document.getElementById('rapiApiVersion');
+            if (aimsidEl) {
+                aimsidEl.value = (r.customAimsid && r.customAimsid.trim()) ? r.customAimsid.trim() : '';
+            }
+            if (urlEl) {
+                urlEl.value = (r.rapiBaseUrl && r.rapiBaseUrl.trim()) ? r.rapiBaseUrl.trim() : '';
+            }
+            if (verEl) {
+                verEl.value = (r.rapiApiVersion != null && String(r.rapiApiVersion).trim()) ? String(r.rapiApiVersion).trim() : '';
+            }
+        });
+    }
+
+    async function detectAimsidFromTab() {
+        const tab = await getActiveTeamsTab();
+        if (!tab) {
+            showConnectionStatus('Откройте вкладку VK Teams / WorkSpace', 'error');
+            return;
+        }
+        try {
+            const response = await new Promise((resolve, reject) => {
+                chrome.tabs.sendMessage(tab.id, { action: 'getDetectedAimsid' }, (res) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(res);
+                    }
+                });
+            });
+            if (response && response.success && response.aimsid) {
+                const aimsidEl = document.getElementById('customAimsid');
+                if (aimsidEl) {
+                    aimsidEl.value = response.aimsid;
+                }
+                showConnectionStatus('✅ AIMSID подставлен — нажмите «Сохранить подключение»', 'success');
+            } else {
+                showConnectionStatus('AIMSID не найден на странице. Вставьте вручную из cookies.', 'error');
+            }
+        } catch (e) {
+            showConnectionStatus('Не удалось прочитать вкладку: ' + (e.message || e), 'error');
+        }
+    }
+
+    function saveConnectionSettings() {
+        const rawAimsid = (document.getElementById('customAimsid').value || '').trim();
         const rawUrl = (document.getElementById('rapiBaseUrl').value || '').trim();
         const rawVer = (document.getElementById('rapiApiVersion').value || '').trim();
+
+        if (!rawAimsid) {
+            showConnectionStatus('Укажите AIMSID', 'error');
+            return;
+        }
+
+        const aimsidPattern = /^\d{3}\.\d+\.\d+:[^\s]+$/;
+        if (!aimsidPattern.test(rawAimsid)) {
+            showConnectionStatus('Неверный формат AIMSID (ожидается 014.…:email)', 'error');
+            return;
+        }
 
         let normalizedUrl = '';
         if (rawUrl) {
@@ -333,26 +644,37 @@
             try {
                 const parsed = new URL(withProto);
                 if (parsed.protocol !== 'https:') {
-                    showRapiStatus('Нужен URL с https://', 'error');
+                    showConnectionStatus('Нужен URL с https://', 'error');
                     return;
                 }
                 normalizedUrl = `${parsed.protocol}//${parsed.host}`;
             } catch (e) {
-                showRapiStatus('Некорректный URL', 'error');
+                showConnectionStatus('Некорректный URL API', 'error');
                 return;
             }
         }
 
+        if (!normalizedUrl) {
+            showConnectionStatus('Укажите базовый URL API', 'error');
+            return;
+        }
+
+        if (!rawVer) {
+            showConnectionStatus('Укажите версию API', 'error');
+            return;
+        }
+
         const payload = {
+            customAimsid: rawAimsid,
             rapiBaseUrl: normalizedUrl,
-            rapiApiVersion: rawVer || ''
+            rapiApiVersion: rawVer
         };
 
         chrome.storage.sync.set(payload, () => {
-            showRapiStatus('✅ RAPI сохранён; открытые вкладки обновят конфиг автоматически.', 'success');
-            getAllTeamsTabs().then(tabs => {
-                tabs.forEach(tab => {
-                    chrome.tabs.sendMessage(tab.id, { action: 'reloadRapiConfig' }).catch(() => {});
+            showConnectionStatus('✅ Подключение сохранено', 'success');
+            getAllTeamsTabs().then((tabs) => {
+                tabs.forEach((tab) => {
+                    chrome.tabs.sendMessage(tab.id, { action: 'reloadConnection' }).catch(() => {});
                 });
             });
         });
@@ -418,6 +740,7 @@
             const isActivated = result.extensionActivated || false;
             const donationOverlay = document.getElementById('donationOverlay');
             const mainTabs = document.getElementById('mainTabs');
+            const connectionTab = document.getElementById('connection-tab');
             const recordingsTab = document.getElementById('recordings-tab');
             const settingsTab = document.getElementById('settings-tab');
 
@@ -428,12 +751,11 @@
                 if (mainTabs) {
                     mainTabs.style.display = 'none';
                 }
-                if (recordingsTab) {
-                    recordingsTab.style.display = 'none';
-                }
-                if (settingsTab) {
-                    settingsTab.style.display = 'none';
-                }
+                [connectionTab, recordingsTab, settingsTab].forEach((el) => {
+                    if (el) {
+                        el.style.display = 'none';
+                    }
+                });
             } else {
                 if (donationOverlay) {
                     donationOverlay.style.display = 'none';
@@ -441,12 +763,11 @@
                 if (mainTabs) {
                     mainTabs.style.display = 'flex';
                 }
-                if (recordingsTab) {
-                    recordingsTab.style.display = '';
-                }
-                if (settingsTab) {
-                    settingsTab.style.display = '';
-                }
+                [connectionTab, recordingsTab, settingsTab].forEach((el) => {
+                    if (el) {
+                        el.style.display = '';
+                    }
+                });
             }
         });
     }
@@ -483,17 +804,28 @@
             activateButton.addEventListener('click', activateExtension);
         }
 
-        // Load current preset
-        loadCurrentPreset();
+        loadReactionSets();
 
-        // Add click handlers to preset cards
-        document.querySelectorAll('.preset-card').forEach(card => {
-            card.addEventListener('click', () => {
-                const presetName = card.getAttribute('data-preset');
-                console.log('[VK Teams Reactions Settings] Preset selected:', presetName);
-                savePreset(presetName);
+        const addSetBtn = document.getElementById('addReactionSetButton');
+        if (addSetBtn) {
+            addSetBtn.addEventListener('click', () => openReactionSetEditor('new'));
+        }
+        const saveSetBtn = document.getElementById('saveReactionSetButton');
+        if (saveSetBtn) {
+            saveSetBtn.addEventListener('click', saveReactionSetFromEditor);
+        }
+        const cancelSetBtn = document.getElementById('cancelReactionSetButton');
+        if (cancelSetBtn) {
+            cancelSetBtn.addEventListener('click', closeReactionSetEditor);
+        }
+        const deleteSetBtn = document.getElementById('deleteReactionSetButton');
+        if (deleteSetBtn) {
+            deleteSetBtn.addEventListener('click', () => {
+                if (editingSetId && editingSetId !== 'new') {
+                    deleteReactionSet(editingSetId);
+                }
             });
-        });
+        }
 
         // Initialize accordion functionality
         initializeAccordion();
@@ -504,21 +836,19 @@
                 const tabName = tab.getAttribute('data-tab');
                 switchTab(tabName);
 
-                // Load specific data when switching tabs
-                if (tabName === 'recordings') {
+                if (tabName === 'connection') {
+                    loadConnectionSettings();
+                } else if (tabName === 'recordings') {
                     loadRecordings();
-                } else if (tabName === 'settings') {
-                    // Load all settings when opening settings tab
-                    loadAiConfig();
-                    loadRapiConnectionSettings();
-                    loadCurrentPreset();
                     loadRecordingSettings();
+                    loadAiConfig();
+                } else if (tabName === 'settings') {
+                    loadReactionSets();
                 }
             });
         });
 
-        // Load recordings immediately on startup (since it's the default tab)
-        loadRecordings();
+        loadConnectionSettings();
 
         // AI provider change handler
         document.getElementById('aiProvider').addEventListener('change', (e) => {
@@ -605,9 +935,13 @@
         // Save AI config button
         document.getElementById('saveAiButton').addEventListener('click', saveAiConfig);
 
-        const saveRapiBtn = document.getElementById('saveRapiButton');
-        if (saveRapiBtn) {
-            saveRapiBtn.addEventListener('click', saveRapiConnectionSettings);
+        const saveConnectionBtn = document.getElementById('saveConnectionButton');
+        if (saveConnectionBtn) {
+            saveConnectionBtn.addEventListener('click', saveConnectionSettings);
+        }
+        const detectAimsidBtn = document.getElementById('detectAimsidButton');
+        if (detectAimsidBtn) {
+            detectAimsidBtn.addEventListener('click', detectAimsidFromTab);
         }
 
         // === Recordings Tab ===
@@ -648,56 +982,6 @@
                     });
                 });
             });
-        }
-
-        // Prefer the tab in the window that was focused when the user opened the popup (usually the messenger).
-        async function getActiveTeamsTab() {
-            try {
-                const tabs = await getAllTeamsTabs();
-
-                console.log('[VK Teams] Found messenger tabs:', tabs.length);
-                tabs.forEach((tab, i) => {
-                    console.log(`[VK Teams] Tab ${i + 1}:`, {
-                        id: tab.id,
-                        url: tabEffectiveUrl(tab),
-                        title: tab.title,
-                        active: tab.active,
-                        windowId: tab.windowId
-                    });
-                });
-
-                if (tabs.length === 0) {
-                    return null;
-                }
-
-                const focused = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-                const focusedUrl = tabEffectiveUrl(focused[0]);
-                if (focused[0] && isMessengerTabUrl(focusedUrl)) {
-                    const match = tabs.find(t => t.id === focused[0].id);
-                    if (match) {
-                        console.log('[VK Teams] Using focused messenger tab:', match.id, focusedUrl);
-                        return match;
-                    }
-                }
-
-                const activeMessenger = tabs.find(t => t.active === true);
-                if (activeMessenger) {
-                    console.log('[VK Teams] Using active messenger tab in some window:', activeMessenger.id);
-                    return activeMessenger;
-                }
-
-                const withLast = tabs.filter(t => typeof t.lastAccessed === 'number');
-                if (withLast.length > 0) {
-                    withLast.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
-                    console.log('[VK Teams] Using most recently used messenger tab:', withLast[0].id);
-                    return withLast[0];
-                }
-
-                return tabs[0];
-            } catch (error) {
-                console.error('[VK Teams Recordings] Error getting active tab:', error);
-                return null;
-            }
         }
 
         // Send message to content script
@@ -1219,42 +1503,42 @@
 
                 if (isNoMessengerTab) {
                     recordingsList.innerHTML = `
-                        <div style="text-align: center; padding: 30px 20px; color: #dc3545;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
-                            <div style="font-weight: 600; margin-bottom: 10px;">Вкладка мессенджера не найдена</div>
-                            <div style="font-size: 12px; color: #666; line-height: 1.6; margin-bottom: 15px;">
+                        <div class="state-panel state-panel-error">
+                            <div class="state-panel-icon">⚠</div>
+                            <div class="state-panel-title">Вкладка мессенджера не найдена</div>
+                            <div class="state-panel-desc">
                                 Откройте VK WorkSpace или корп. Teams <strong>в обычной вкладке</strong> этого браузера (не отдельное PWA‑окно, если возможно).
                             </div>
-                            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: left; font-size: 11px; line-height: 1.8;">
-                                <div style="font-weight: 600; margin-bottom: 8px;">Что сделать:</div>
-                                <div>1️⃣ Вкладка с <strong>app.workspace.vk.ru</strong> (или webim.teams.…) в Chrome/Edge</div>
-                                <div>2️⃣ Обновите страницу (F5), затем снова откройте этот попап</div>
-                                <div>3️⃣ На <code>chrome://extensions</code> нажмите «Обновить» у расширения после правок в папке</div>
+                            <div class="state-panel-tips">
+                                <div style="font-weight: 600; margin-bottom: 6px;">Что сделать:</div>
+                                <div>1. Вкладка с <strong>app.workspace.vk.ru</strong> (или webim.teams.…) в Chrome/Edge</div>
+                                <div>2. Обновите страницу (F5), затем снова откройте этот попап</div>
+                                <div>3. На <code>chrome://extensions</code> нажмите «Обновить» у расширения после правок в папке</div>
                             </div>
                         </div>
                     `;
                 } else if (isContentScriptMissing) {
                     recordingsList.innerHTML = `
-                        <div style="text-align: center; padding: 30px 20px; color: #c05621;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">🔌</div>
-                            <div style="font-weight: 600; margin-bottom: 10px;">Вкладка есть, скрипт расширения не отвечает</div>
-                            <div style="font-size: 12px; color: #666; line-height: 1.6; margin-bottom: 12px;">
+                        <div class="state-panel state-panel-warning">
+                            <div class="state-panel-icon">🔌</div>
+                            <div class="state-panel-title">Вкладка есть, скрипт расширения не отвечает</div>
+                            <div class="state-panel-desc">
                                 Часто это не PWA, а то что контент‑скрипт не внедрён: страница открыта до установки расширения, не пройдена активация или нужен перезапуск вкладки.
                             </div>
-                            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: left; font-size: 11px; line-height: 1.8;">
+                            <div class="state-panel-tips">
                                 <div>• Обновите вкладку <strong>app.workspace.vk.ru</strong> (Ctrl+F5)</div>
                                 <div>• В попапе расширения пройдите <strong>активацию</strong> (если показывается первый экран)</div>
                                 <div>• В консоли страницы (F12) ищите лог: <code>[VK Teams Custom Reactions] Extension loaded!</code></div>
                             </div>
-                            <div style="margin-top: 12px; font-size: 10px; color: #999; word-break: break-all;">${escapeHtml(msg)}</div>
+                            <div class="state-panel-error-msg">${escapeHtml(msg)}</div>
                         </div>
                     `;
                 } else {
                     recordingsList.innerHTML = `
-                        <div style="text-align: center; padding: 40px 20px; color: #dc3545;">
-                            <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
-                            <div style="font-weight: 600; margin-bottom: 5px;">Не удалось загрузить записи</div>
-                            <div style="font-size: 11px; word-break: break-all;">${escapeHtml(msg)}</div>
+                        <div class="state-panel state-panel-error">
+                            <div class="state-panel-icon">⚠</div>
+                            <div class="state-panel-title">Не удалось загрузить записи</div>
+                            <div class="state-panel-error-msg">${escapeHtml(msg)}</div>
                         </div>
                     `;
                 }

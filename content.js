@@ -29,7 +29,30 @@
             });
         });
     }
-    const DEFAULT_REACTIONS = ['👍', '🤡', '🤦', '🔥', '💩', '✨'];
+
+    function loadAimsidConfig() {
+        return new Promise((resolve) => {
+            chrome.storage.sync.get(['customAimsid'], (r) => {
+                const stored = (r.customAimsid && typeof r.customAimsid === 'string') ? r.customAimsid.trim() : '';
+                if (stored) {
+                    aimsid = stored;
+                    console.log('[VK Teams Custom Reactions] AIMSID loaded from extension settings');
+                } else {
+                    aimsid = getAIMSID();
+                    if (aimsid) {
+                        console.log('[VK Teams Custom Reactions] AIMSID auto-detected from page');
+                    }
+                }
+                resolve();
+            });
+        });
+    }
+
+    function loadConnectionConfig() {
+        return loadRapiConfig().then(() => loadAimsidConfig());
+    }
+    const DEFAULT_REACTIONS = ['🤨', '🙄', '🥱', '😭', '🥶', '🤮', '🥺', '💀', '🦧', '🔇'];
+    const MAX_REACTIONS = 30;
 
     // State
     let aimsid = null;
@@ -39,43 +62,222 @@
 
     // === Utility Functions ===
 
+    function closeActiveReactionPopup() {
+        if (!activePopup) {
+            return;
+        }
+        try {
+            activePopup.remove();
+        } catch (e) {
+            console.error('[VK Teams Custom Reactions] Error removing popup:', e);
+        }
+        activePopup = null;
+    }
+
+    /**
+     * Parse emoji list from array or string (spaces, commas, or consecutive emojis).
+     */
+    function parseReactionsInput(input) {
+        if (input == null) {
+            return null;
+        }
+        if (Array.isArray(input)) {
+            const list = input
+                .map((item) => (typeof item === 'string' ? item.trim() : ''))
+                .filter(Boolean);
+            return list.length ? list : null;
+        }
+        if (typeof input !== 'string') {
+            return null;
+        }
+        const trimmed = input.trim();
+        if (!trimmed) {
+            return null;
+        }
+        if (/[\s,;|]/.test(trimmed)) {
+            const list = trimmed.split(/[\s,;|]+/).map((s) => s.trim()).filter(Boolean);
+            return list.length ? list : null;
+        }
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            const seg = new Intl.Segmenter('ru', { granularity: 'grapheme' });
+            const list = [...seg.segment(trimmed)].map((s) => s.segment).filter(Boolean);
+            return list.length ? list : null;
+        }
+        return [...trimmed];
+    }
+
+    /**
+     * Apply reactions at runtime (popup, storage, or console API).
+     */
+    function applyReactions(reactions, options = {}) {
+        const { persist = false, source = 'unknown' } = options;
+        const parsed = parseReactionsInput(reactions);
+        if (!parsed || !parsed.length) {
+            console.warn('[VK Teams Custom Reactions] Invalid reactions:', reactions);
+            return false;
+        }
+        CUSTOM_REACTIONS = parsed.slice(0, MAX_REACTIONS);
+        closeActiveReactionPopup();
+        syncReactionsPageAttribute();
+        console.log('[VK Teams Custom Reactions] Applied (%s):', source, CUSTOM_REACTIONS);
+        if (persist && chrome.storage && chrome.storage.sync) {
+            persistReactionsToStorage();
+        }
+        return true;
+    }
+
+    function resolveReactionsFromStorage(result) {
+        if (Array.isArray(result.reactionSets) && result.reactionSets.length) {
+            const activeId = result.activeReactionSetId || result.reactionSets[0].id;
+            const activeSet = result.reactionSets.find((s) => s && s.id === activeId);
+            if (activeSet && Array.isArray(activeSet.reactions) && activeSet.reactions.length) {
+                return activeSet.reactions;
+            }
+        }
+        if (result.customReactions && Array.isArray(result.customReactions) && result.customReactions.length) {
+            return result.customReactions;
+        }
+        return null;
+    }
+
+    function persistReactionsToStorage() {
+        chrome.storage.sync.get(['reactionSets', 'activeReactionSetId'], (result) => {
+            const sets = Array.isArray(result.reactionSets) ? result.reactionSets : [];
+            const activeId = result.activeReactionSetId;
+            const payload = { customReactions: CUSTOM_REACTIONS };
+            if (sets.length && activeId) {
+                payload.reactionSets = sets.map((set) => (
+                    set.id === activeId
+                        ? Object.assign({}, set, { reactions: CUSTOM_REACTIONS.slice() })
+                        : set
+                ));
+                payload.activeReactionSetId = activeId;
+            }
+            chrome.storage.sync.set(payload);
+        });
+    }
+
     /**
      * Load custom reactions from storage
      */
     function loadCustomReactions() {
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['customReactions'], (result) => {
-                if (result.customReactions && Array.isArray(result.customReactions)) {
-                    CUSTOM_REACTIONS = result.customReactions;
-                    console.log('[VK Teams Custom Reactions] Loaded reactions from storage:', CUSTOM_REACTIONS);
+            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
+                const reactions = resolveReactionsFromStorage(result);
+                if (reactions) {
+                    applyReactions(reactions, { persist: false, source: 'storage' });
                 } else {
-                    CUSTOM_REACTIONS = [...DEFAULT_REACTIONS];
-                    console.log('[VK Teams Custom Reactions] Using default reactions:', CUSTOM_REACTIONS);
+                    applyReactions(DEFAULT_REACTIONS, { persist: false, source: 'defaults' });
                 }
                 resolve();
             });
         });
     }
 
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'sync') {
+            return;
+        }
+        if (changes.customReactions || changes.reactionSets || changes.activeReactionSetId) {
+            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
+                const reactions = resolveReactionsFromStorage(result);
+                if (reactions) {
+                    applyReactions(reactions, { persist: false, source: 'storage-sync' });
+                }
+            });
+        }
+    });
+
+    function syncReactionsPageAttribute() {
+        try {
+            document.documentElement.setAttribute(
+                'data-vk-teams-reactions',
+                JSON.stringify(CUSTOM_REACTIONS)
+            );
+        } catch (e) {
+            /* ignore */
+        }
+    }
+
+    /** API in isolated content-script world (DevTools → контекст расширения) */
+    window.__vkTeamsReactions = {
+        get: () => [...CUSTOM_REACTIONS],
+        defaults: () => [...DEFAULT_REACTIONS],
+        set: (reactions, persist = true) => applyReactions(reactions, { persist, source: 'console' }),
+        reset: () => applyReactions(DEFAULT_REACTIONS, { persist: true, source: 'console-reset' })
+    };
+
+    /** Bridge into page context so F12 (top) console can call __vkTeamsReactions */
+    function installPageConsoleBridge() {
+        if (document.documentElement.getAttribute('data-vk-teams-reactions-bridge')) {
+            syncReactionsPageAttribute();
+            return;
+        }
+        document.documentElement.setAttribute('data-vk-teams-reactions-bridge', '1');
+        syncReactionsPageAttribute();
+
+        const script = document.createElement('script');
+        script.textContent = `(() => {
+            if (window.__vkTeamsReactions && window.__vkTeamsReactions.__pageBridge) return;
+            const DEFAULTS = ${JSON.stringify(DEFAULT_REACTIONS)};
+            const read = () => {
+                try {
+                    const raw = document.documentElement.getAttribute('data-vk-teams-reactions');
+                    return raw ? JSON.parse(raw) : [];
+                } catch (e) { return []; }
+            };
+            const post = (type, extra) => window.postMessage(Object.assign({
+                source: 'vkteams-reactions-extension',
+                type: type
+            }, extra || {}), '*');
+            window.__vkTeamsReactions = {
+                __pageBridge: true,
+                get: () => read(),
+                defaults: () => DEFAULTS.slice(),
+                set: (reactions, persist) => post('set', { reactions: reactions, persist: persist !== false }),
+                reset: () => post('reset')
+            };
+        })();`;
+        (document.documentElement || document.head).appendChild(script);
+        script.remove();
+
+        window.addEventListener('message', (event) => {
+            if (event.source !== window || !event.data || event.data.source !== 'vkteams-reactions-extension') {
+                return;
+            }
+            if (event.data.type === 'set') {
+                applyReactions(event.data.reactions, {
+                    persist: event.data.persist !== false,
+                    source: 'page-console'
+                });
+            } else if (event.data.type === 'reset') {
+                applyReactions(DEFAULT_REACTIONS, { persist: true, source: 'page-console-reset' });
+            }
+        });
+    }
+
+    installPageConsoleBridge();
+
     /**
      * Listen for messages from popup
      */
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.action === 'reloadReactions' && message.reactions) {
-            console.log('[VK Teams Custom Reactions] Reloading reactions:', message.reactions);
-            CUSTOM_REACTIONS = message.reactions;
-
-            // Close any open popup
-            if (activePopup) {
-                try {
-                    activePopup.remove();
-                } catch (e) {
-                    console.error('[VK Teams Custom Reactions] Error removing popup:', e);
-                }
-                activePopup = null;
+        if (message.action === 'reloadReactions') {
+            if (message.reactions) {
+                applyReactions(message.reactions, { persist: false, source: 'popup' });
+                sendResponse({ success: true, reactions: CUSTOM_REACTIONS });
+            } else {
+                loadCustomReactions().then(() => {
+                    sendResponse({ success: true, reactions: CUSTOM_REACTIONS });
+                });
+                return true;
             }
+            return false;
+        }
 
-            sendResponse({ success: true });
+        if (message.action === 'getReactions') {
+            sendResponse({ success: true, reactions: CUSTOM_REACTIONS, defaults: DEFAULT_REACTIONS });
+            return false;
         }
 
         if (message.action === 'reloadAi') {
@@ -95,11 +297,17 @@
             return false;
         }
 
-        if (message.action === 'reloadRapiConfig') {
-            loadRapiConfig().then(() => {
-                sendResponse({ success: true });
+        if (message.action === 'reloadRapiConfig' || message.action === 'reloadConnection') {
+            loadConnectionConfig().then(() => {
+                sendResponse({ success: true, aimsid: aimsid ? true : false });
             });
             return true;
+        }
+
+        if (message.action === 'getDetectedAimsid') {
+            const detected = getAIMSID();
+            sendResponse({ success: !!detected, aimsid: detected || null });
+            return false;
         }
 
         if (message.action === 'extensionActivated') {
@@ -228,7 +436,9 @@
      * Set reaction via RAPI
      */
     function setReaction(messageId, chatId, reaction) {
-        aimsid = 'ВСТАВЬ СЮДА AIMSID ТУТ !!! <<<<>>><<<<>>>>>!!!!'
+        if (!aimsid) {
+            aimsid = getAIMSID();
+        }
         if (!aimsid) {
             showNotification('❌ AIMSID not found', 'error');
             return;
@@ -303,50 +513,15 @@
     function createEmojiPopup(messageElement, messageId, chatId, buttonElement) {
         console.log('[VK Teams Custom Reactions] Creating popup for message:', messageId);
 
-        // Close existing popup if any
-        if (activePopup) {
-            console.log('[VK Teams Custom Reactions] Closing existing popup');
-            try {
-                activePopup.remove();
-            } catch (e) {
-                console.error('[VK Teams Custom Reactions] Error removing popup:', e);
-            }
-            activePopup = null;
-        }
+        closeActiveReactionPopup();
 
         const popup = document.createElement('div');
         popup.className = 'vkteams-custom-reactions-popup';
-        popup.style.cssText = `
-            position: fixed;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            padding: 12px;
-            z-index: 10000;
-            display: flex;
-            gap: 8px;
-        `;
 
         CUSTOM_REACTIONS.forEach(emoji => {
             const button = document.createElement('button');
+            button.type = 'button';
             button.textContent = emoji;
-            button.style.cssText = `
-                font-size: 24px;
-                border: none;
-                background: transparent;
-                cursor: pointer;
-                padding: 8px;
-                border-radius: 4px;
-                transition: background 0.2s;
-            `;
-
-            button.addEventListener('mouseenter', () => {
-                button.style.background = '#f0f0f0';
-            });
-
-            button.addEventListener('mouseleave', () => {
-                button.style.background = 'transparent';
-            });
 
             button.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -371,7 +546,7 @@
         let top = buttonRect.top;
 
         // Check if popup would go off screen on the right
-        const popupWidth = 300; // approximate
+        const popupWidth = Math.min(520, CUSTOM_REACTIONS.length * 34 + 16);
         if (left + popupWidth > window.innerWidth) {
             // Position to the left of button instead
             left = buttonRect.left - popupWidth - 10;
@@ -383,7 +558,7 @@
         }
 
         // Make sure it's not off screen vertically
-        const popupHeight = 60; // approximate
+        const popupHeight = 40;
         if (top + popupHeight > window.innerHeight) {
             top = window.innerHeight - popupHeight - 10;
         }
@@ -1054,10 +1229,15 @@
 
         console.log('[VK Teams Extension] Extension activated. Initializing...');
 
-        await loadRapiConfig();
+        await loadConnectionConfig();
 
         // Load custom reactions from storage first
         await loadCustomReactions();
+        installPageConsoleBridge();
+        console.log(
+            '[VK Teams Custom Reactions] Смена на лету: попап → «Наборы реакций»,',
+            'или F12: __vkTeamsReactions.set("🤨 🙄 🥱") / .get() / .reset()'
+        );
 
         // Initialize AI Manager
         if (window.VKTeamsAI && window.VKTeamsAI.AIManager) {
@@ -1068,12 +1248,8 @@
             console.warn('[VK Teams AI] AI Provider module not loaded');
         }
 
-        aimsid = getAIMSID();
-
         if (!aimsid) {
-            console.warn('[VK Teams Custom Reactions] AIMSID not found');
-        } else {
-            console.log('[VK Teams Custom Reactions] AIMSID found');
+            console.warn('[VK Teams Custom Reactions] AIMSID not found — укажите во вкладке «Подключение»');
         }
 
         // Add styles
@@ -1108,6 +1284,39 @@
                 100% {
                     transform: rotate(360deg);
                 }
+            }
+
+            .vkteams-custom-reactions-popup {
+                position: fixed;
+                background: #232324;
+                border-radius: 6px;
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+                padding: 4px 6px;
+                z-index: 10000;
+                display: flex;
+                flex-wrap: nowrap;
+                align-items: center;
+                gap: 2px;
+            }
+
+            .vkteams-custom-reactions-popup button {
+                font-size: 22px;
+                line-height: 1;
+                border: none;
+                background: transparent;
+                cursor: pointer;
+                padding: 4px 5px;
+                margin: 0;
+                border-radius: 4px;
+                transition: background 0.15s ease;
+            }
+
+            .vkteams-custom-reactions-popup button:hover {
+                background: rgba(255, 255, 255, 0.12);
+            }
+
+            .vkteams-custom-reactions-popup button:active {
+                background: rgba(255, 255, 255, 0.18);
             }
         `;
         document.head.appendChild(style);
