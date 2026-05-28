@@ -42,6 +42,16 @@
             -webkit-font-smoothing: antialiased;
         }
 
+        body.vkteams-embed-panel {
+            width: 100%;
+            min-height: 100%;
+        }
+
+        body.vkteams-embed-panel .footer {
+            position: sticky;
+            bottom: 0;
+        }
+
         ::-webkit-scrollbar {
             width: 6px;
         }
@@ -436,6 +446,28 @@
         .reaction-set-editor-actions .save-button {
             flex: 1;
             min-width: 120px;
+        }
+
+        .sidebar-link-card {
+            cursor: default;
+        }
+
+        .sidebar-link-card .sidebar-link-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            word-break: break-all;
+            margin-top: 6px;
+        }
+
+        .sidebar-link-card .sidebar-link-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sidebar-link-card .sidebar-link-emoji {
+            font-size: 22px;
+            line-height: 1;
         }
 
         /* Footer */
@@ -971,19 +1003,19 @@
         <div class="form-group">
             <label class="form-label">AIMSID</label>
             <input type="text" class="form-input" id="customAimsid" placeholder="014.1234567890.1234567890:user@example.com" autocomplete="off" spellcheck="false">
-            <div class="hint">Токен сессии для <code>setReaction</code>. Можно вставить шаблон кнопкой ниже и затем сохранить подключение.</div>
+            <div class="hint">Токен сессии для API реакций. Можно подставить кнопкой ниже.</div>
             <button type="button" class="save-button btn-outline" id="detectAimsidButton" style="margin-top: 8px;">Вставить из вкладки VK Teams</button>
         </div>
 
         <div class="form-group">
             <label class="form-label">Базовый URL API (без пути /api/…)</label>
-            <input type="text" class="form-input" id="rapiBaseUrl" placeholder="https://u.…">
+            <input type="text" class="form-input" id="rapiBaseUrl" placeholder="https://u.myteam.vmailru.net" value="https://u.myteam.vmailru.net">
             <div class="hint"><strong>VK WorkSpace</strong>: F12 → Сеть → <code>rapi</code> → хост до <code>/api</code>. <strong>MyTeam</strong>: <code>:authority</code> в заголовках запроса.</div>
         </div>
 
         <div class="form-group">
             <label class="form-label">Версия API (число из URL)</label>
-            <input type="text" class="form-input" id="rapiApiVersion" placeholder="125">
+            <input type="text" class="form-input" id="rapiApiVersion" placeholder="145" value="145">
             <div class="hint">Число в пути: <code>/api/v<strong>125</strong>/…</code></div>
         </div>
 
@@ -1170,12 +1202,59 @@
                 <div class="status-message" id="reactionsStatusMessage" style="margin-top: 10px;"></div>
             </div>
         </div>
+
+        <div class="settings-section" style="margin-top: 16px;">
+            <div class="section-header" data-section="sidebar-links">
+                <span class="section-toggle">▶</span>
+                <span class="section-title">Кнопки сайдбара</span>
+            </div>
+            <div class="section-content collapsed" id="sidebar-links">
+                <div class="hint" style="margin-bottom: 12px;">
+                    Быстрые ссылки в левой панели мессенджера (над кнопкой настроек расширения). До 15 штук.
+                </div>
+
+                <div id="sidebarLinksList"></div>
+
+                <div id="sidebarLinkEditor" class="reaction-set-editor" style="display: none;">
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label class="form-label">Название</label>
+                        <input type="text" class="form-input" id="sidebarLinkTitleInput" placeholder="Например: Wiki">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label class="form-label">Адрес (URL)</label>
+                        <input type="url" class="form-input" id="sidebarLinkUrlInput" placeholder="https://example.com">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label class="form-label">Иконка (эмодзи)</label>
+                        <input type="text" class="form-input" id="sidebarLinkEmojiInput" placeholder="🔗" maxlength="4" style="font-size: 22px;">
+                        <div class="hint">Один эмодзи или символ — отображается в сайдбаре</div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="sidebarLinkNewTabInput" checked>
+                            <span class="form-label">Открывать в новой вкладке</span>
+                        </label>
+                    </div>
+                    <div class="reaction-set-editor-actions">
+                        <button type="button" class="save-button" id="saveSidebarLinkButton">Сохранить</button>
+                        <button type="button" class="btn-secondary" id="cancelSidebarLinkButton">Отмена</button>
+                        <button type="button" class="btn-danger-outline" id="deleteSidebarLinkButton" style="display: none;">Удалить</button>
+                    </div>
+                </div>
+
+                <button type="button" class="save-button btn-outline" id="addSidebarLinkButton" style="margin-top: 4px;">+ Добавить кнопку</button>
+                <div class="status-message" id="sidebarLinksStatusMessage" style="margin-top: 10px;"></div>
+            </div>
+        </div>
     </div>
 
     <div class="footer">
         Настройки сохраняются автоматически
     </div>
 
+    <script src="modules/reaction-storage.js"></script>
+    <script src="modules/connection-storage.js"></script>
+    <script src="modules/sidebar-links-storage.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

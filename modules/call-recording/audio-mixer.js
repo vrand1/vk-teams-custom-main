@@ -1,5 +1,3 @@
-// VK Teams Call Recording - Audio Mixer
-// Mixes multiple audio streams into one for recording
 
 (function() {
     'use strict';
@@ -12,7 +10,6 @@
             console.log('[VK Teams AudioMixer] Initialized');
         }
 
-        // Mix multiple MediaStreams into one
         mixStreams(streams) {
             if (!streams || streams.length === 0) {
                 console.error('[VK Teams AudioMixer] No streams provided');
@@ -25,7 +22,6 @@
             }
 
             try {
-                // Create audio context
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 console.log('[VK Teams AudioMixer] AudioContext created:', {
                     sampleRate: this.audioContext.sampleRate,
@@ -34,7 +30,6 @@
                     outputLatency: this.audioContext.outputLatency
                 });
 
-                // Resume context if suspended (required by browser autoplay policies)
                 if (this.audioContext.state === 'suspended') {
                     console.log('[VK Teams AudioMixer] AudioContext is suspended, attempting to resume...');
                     this.audioContext.resume().then(() => {
@@ -44,14 +39,12 @@
                     });
                 }
 
-                // Create destination for mixing
                 this.destination = this.audioContext.createMediaStreamDestination();
 
                 console.log('[VK Teams AudioMixer] ★★★ Starting to mix', streams.length, 'streams');
 
                 let totalTracksConnected = 0;
 
-                // Connect each stream to the destination
                 streams.forEach((stream, index) => {
                     if (!stream) {
                         console.warn(`[VK Teams AudioMixer] Stream ${index} is null or undefined`);
@@ -78,7 +71,6 @@
                                 settings: track.getSettings ? track.getSettings() : 'N/A'
                             });
 
-                            // Check if track is usable
                             if (track.readyState !== 'live') {
                                 console.warn(`[VK Teams AudioMixer]   ⚠️ Track ${trackIndex} is not live (state: ${track.readyState}), skipping`);
                                 return;
@@ -89,15 +81,12 @@
                                 return;
                             }
 
-                            // Create a temporary MediaStream with just this track
                             const tempStream = new MediaStream([track]);
                             console.log(`[VK Teams AudioMixer]   Created temp stream:`, tempStream.id);
 
-                            // Create audio source from the stream
                             const source = this.audioContext.createMediaStreamSource(tempStream);
                             console.log(`[VK Teams AudioMixer]   Created audio source from temp stream`);
 
-                            // Connect to destination
                             source.connect(this.destination);
                             console.log(`[VK Teams AudioMixer]   ✓ Connected track ${trackIndex} from stream ${index} to destination`);
 
@@ -155,26 +144,21 @@
             }
         }
 
-        // Clean up resources
         cleanup() {
             console.log('[VK Teams AudioMixer] Cleaning up');
 
-            // Disconnect all sources
             this.sources.forEach(source => {
                 try {
                     source.disconnect();
                 } catch (e) {
-                    // Ignore
                 }
             });
             this.sources = [];
 
-            // Close audio context
             if (this.audioContext) {
                 try {
                     this.audioContext.close();
                 } catch (e) {
-                    // Ignore
                 }
                 this.audioContext = null;
             }
@@ -183,7 +167,6 @@
         }
     }
 
-    // Export to global scope
     window.VKTeamsCallRecording = window.VKTeamsCallRecording || {};
     window.VKTeamsCallRecording.AudioMixer = AudioMixer;
 

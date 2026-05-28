@@ -1,16 +1,6 @@
-// VK Teams Custom Reactions - Background Service Worker
-// Handles AI API requests to bypass CORS
-
-console.log('[VK Teams AI Background] Service worker loaded');
-
-// Handle messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('[VK Teams AI Background] Message received:', message);
-
     if (message.action === 'aiRequest') {
-        console.log('[VK Teams AI Background] Received AI request:', message.provider);
 
-        // Make API request
         makeAiRequest(message)
             .then(result => {
                 sendResponse({ success: true, result: result });
@@ -24,9 +14,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === 'audioTranscription') {
-        console.log('[VK Teams AI Background] Received audio transcription request');
-
-        // Make transcription request
         makeTranscriptionRequest(message)
             .then(result => {
                 sendResponse({ success: true, result: result });
@@ -40,9 +27,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === 'chatCompletion') {
-        console.log('[VK Teams AI Background] Received chat completion request');
-
-        // Make chat completion request using custom API
         makeCustomRequest(message.config, message.prompt, null)
             .then(result => {
                 sendResponse({ success: true, result: result });
@@ -54,12 +38,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         return true; // Will respond asynchronously
     }
+
+    if (message.action === 'openSettingsWindow') {
+        chrome.windows.create({
+            url: chrome.runtime.getURL('popup.html'),
+            type: 'popup',
+            width: 420,
+            height: 720,
+            focused: true
+        }, () => {
+            if (chrome.runtime.lastError) {
+                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+                sendResponse({ success: true });
+            }
+        });
+        return true;
+    }
 });
 
-// Make AI API request based on provider
 async function makeAiRequest(request) {
     const { provider, config, prompt, context } = request;
-    console.log('[VK Teams AI Background] Making AI request for provider:', provider);
 
     try {
         switch (provider) {
@@ -83,7 +82,6 @@ async function makeAiRequest(request) {
     }
 }
 
-// OpenAI API
 async function makeOpenAIRequest(config, prompt, context) {
     const messages = [];
     if (context) {
@@ -134,12 +132,10 @@ async function makeOpenAIRequest(config, prompt, context) {
         if (error.message.startsWith('OpenAI API error')) {
             throw error;
         }
-        // Network errors, CORS, etc.
         throw new Error(`OpenAI network error: ${error.message}`);
     }
 }
 
-// Claude API
 async function makeClaudeRequest(config, prompt, context) {
     console.log('[VK Teams AI Background] Making Claude request...');
     console.log('[VK Teams AI Background] Config:', { model: config.model, hasApiKey: !!config.apiKey });
@@ -195,12 +191,10 @@ async function makeClaudeRequest(config, prompt, context) {
         if (error.message.startsWith('Claude API error')) {
             throw error;
         }
-        // Network errors, CORS, etc.
         throw new Error(`Claude network error: ${error.message}`);
     }
 }
 
-// Gemini API
 async function makeGeminiRequest(config, prompt, context) {
     const fullPrompt = context ? `${context}\n\n${prompt}` : prompt;
     const model = config.model || 'gemini-pro';
@@ -250,12 +244,10 @@ async function makeGeminiRequest(config, prompt, context) {
         if (error.message.startsWith('Gemini API error')) {
             throw error;
         }
-        // Network errors, CORS, etc.
         throw new Error(`Gemini network error: ${error.message}`);
     }
 }
 
-// Ollama API (Local)
 async function makeOllamaRequest(config, prompt, context) {
     const fullPrompt = context ? `${context}\n\n${prompt}` : prompt;
     const endpoint = config.endpoint || 'http://localhost:11434/api/generate';
@@ -302,22 +294,17 @@ async function makeOllamaRequest(config, prompt, context) {
         if (error.message.startsWith('Ollama API error')) {
             throw error;
         }
-        // Network errors - часто означает что Ollama не запущен
         throw new Error(`Ollama network error: ${error.message}. Убедитесь что Ollama запущен на ${endpoint}`);
     }
 }
 
-// Custom API
 async function makeCustomRequest(config, prompt, context) {
     const fullPrompt = context ? `${context}\n\n${prompt}` : prompt;
 
-    // Determine request format (simple or OpenAI-compatible)
     const format = config.format || 'simple';
     let requestBody;
 
     if (format === 'openai') {
-        // OpenAI-compatible format
-        // Add system message to suppress thinking/reasoning output
         const messages = [
             {
                 role: 'system',
@@ -334,13 +321,11 @@ async function makeCustomRequest(config, prompt, context) {
             messages: messages,
             temperature: config.temperature || 0.7,
             max_tokens: config.maxTokens || 500,
-            // Try multiple parameter variations for disabling thinking
             enable_thinking: false,
             stream_thinking: false,
             show_reasoning: false
         };
     } else {
-        // Simple format (default)
         requestBody = {
             prompt: fullPrompt,
             temperature: config.temperature || 0.7,
@@ -350,13 +335,11 @@ async function makeCustomRequest(config, prompt, context) {
             show_reasoning: false
         };
 
-        // Include model if specified
         if (config.model) {
             requestBody.model = config.model;
         }
     }
 
-    // Debug logging to see exact request
     console.log('[VK Teams AI Background] Custom API request:', {
         endpoint: config.endpoint,
         model: config.model,
@@ -365,13 +348,11 @@ async function makeCustomRequest(config, prompt, context) {
     });
 
     try {
-        // Build headers
         const headers = {
             'Content-Type': 'application/json',
             ...(config.headers || {})
         };
 
-        // Add Authorization header if API key is provided
         if (config.apiKey) {
             headers['Authorization'] = `Bearer ${config.apiKey}`;
         }
@@ -399,21 +380,15 @@ async function makeCustomRequest(config, prompt, context) {
 
         const data = await response.json();
 
-        // Debug: log raw response
         console.log('[VK Teams AI Background] Custom API raw response:', data);
 
-        // Parse response based on format
         let text;
         if (format === 'openai') {
-            // OpenAI format: choices[0].message.content
             text = data.choices?.[0]?.message?.content || data.response || data.text || data.content;
         } else {
-            // Simple format: response, text, or content
             text = data.response || data.text || data.content || data.choices?.[0]?.message?.content;
         }
 
-        // Remove thinking tags and their content (for models that use reasoning tags)
-        // This removes everything between <think> and </think> tags
         if (text) {
             text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         }
@@ -432,12 +407,10 @@ async function makeCustomRequest(config, prompt, context) {
         if (error.message.startsWith('Custom API error')) {
             throw error;
         }
-        // Network errors, CORS, etc.
         throw new Error(`Custom API network error: ${error.message}. Проверьте доступность endpoint: ${config.endpoint}`);
     }
 }
 
-// Audio Transcription API (OpenAI Whisper compatible)
 async function makeTranscriptionRequest(request) {
     const { endpoint, apiKey, model, audioData, audioType, language, prompt, responseFormat } = request;
 
@@ -452,7 +425,6 @@ async function makeTranscriptionRequest(request) {
     });
 
     try {
-        // Convert base64 to Blob
         const audioBlob = base64ToBlob(audioData, audioType);
 
         console.log('[VK Teams AI Background] ★★★ Converted base64 to blob:', {
@@ -462,9 +434,7 @@ async function makeTranscriptionRequest(request) {
             timestamp: new Date().toISOString()
         });
 
-        // Create FormData for multipart/form-data upload
         const formData = new FormData();
-        // Use unique filename to prevent API caching issues
         const uniqueFilename = `recording_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.webm`;
         formData.append('file', audioBlob, uniqueFilename);
         formData.append('model', model);
@@ -481,7 +451,6 @@ async function makeTranscriptionRequest(request) {
             formData.append('response_format', responseFormat);
         }
 
-        // Build headers
         const headers = {};
         if (apiKey) {
             headers['Authorization'] = `Bearer ${apiKey}`;
@@ -541,12 +510,10 @@ async function makeTranscriptionRequest(request) {
         if (error.message.startsWith('Transcription API error')) {
             throw error;
         }
-        // Network errors, CORS, etc.
         throw new Error(`Transcription network error: ${error.message}`);
     }
 }
 
-// Helper: Convert base64 to Blob
 function base64ToBlob(base64, mimeType) {
     const byteCharacters = atob(base64);
     const byteNumbers = new Array(byteCharacters.length);

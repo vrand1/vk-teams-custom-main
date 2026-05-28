@@ -1,10 +1,6 @@
-// VK Teams Custom Reactions - Universal AI Provider
-// Supports: OpenAI, Claude, Gemini, Ollama, Custom endpoints
 
 (function() {
     'use strict';
-
-    // === Base AI Provider Interface ===
     class AIProvider {
         constructor(config) {
             this.config = config;
@@ -15,7 +11,6 @@
         }
 
         async generateResponse(prompt, context = '') {
-            // Send request to background script to bypass CORS
             console.log('[VK Teams AI] Sending request to background script:', this.config.provider);
             return new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage({
@@ -41,15 +36,11 @@
             });
         }
     }
-
-    // === Simplified Providers (all use base class) ===
     class OpenAIProvider extends AIProvider {}
     class ClaudeProvider extends AIProvider {}
     class GeminiProvider extends AIProvider {}
     class OllamaProvider extends AIProvider {}
     class CustomProvider extends AIProvider {}
-
-    // === AI Manager ===
     class AIManager {
         constructor() {
             this.provider = null;
@@ -57,7 +48,6 @@
         }
 
         async init() {
-            // Load AI config from storage
             return new Promise((resolve) => {
                 chrome.storage.sync.get(['aiConfig'], (result) => {
                     if (result.aiConfig) {
@@ -166,17 +156,13 @@
                 throw new Error('AI not configured');
             }
 
-            // Auto-detect language by counting Cyrillic vs Latin characters
             const cyrillicCount = (messageText.match(/[а-яА-ЯёЁ]/g) || []).length;
             const latinCount = (messageText.match(/[a-zA-Z]/g) || []).length;
 
-            // If more Cyrillic characters than Latin, it's Russian
-            // Otherwise it's English (or treat as English if equal/no letters)
             const isRussian = cyrillicCount > latinCount;
 
             let prompt;
             if (isRussian) {
-                // Russian to English
                 prompt = `You are a professional translator for corporate communications. Translate Russian business text to English.
 
 CONTEXT:
@@ -205,7 +191,6 @@ RUSSIAN TEXT:
 
 ENGLISH TRANSLATION:`;
             } else {
-                // English to Russian
                 prompt = `Ты профессиональный переводчик корпоративных коммуникаций. Твоя задача - перевести АНГЛИЙСКИЙ текст на РУССКИЙ язык.
 
 ВАЖНО: Текст ниже написан на АНГЛИЙСКОМ языке. Ты ОБЯЗАТЕЛЬНО должен перевести его на РУССКИЙ. НЕ оставляй текст на английском!
@@ -365,16 +350,13 @@ ${guide.example}
                 throw new Error('AI not configured');
             }
 
-            // Combine user's custom prompt with the message text
             const fullPrompt = `${userPrompt}\n\nСообщение: "${messageText}"`;
             return await this.provider.generateResponse(fullPrompt);
         }
     }
 
-    // Export to global scope for content.js
     window.VKTeamsAI = {
         AIManager: AIManager
     };
 
-    console.log('[VK Teams AI] AI Provider module loaded');
 })();

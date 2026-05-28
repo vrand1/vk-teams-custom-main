@@ -1,5 +1,3 @@
-// VK Teams Call Recording - Audio Recorder
-// Records audio from MediaStream using MediaRecorder API
 
 (function() {
     'use strict';
@@ -28,7 +26,6 @@
             console.log('[VK Teams AudioRecorder] Initialized with options:', this.options);
         }
 
-        // Start recording from MediaStream
         async startRecording(stream, keepExistingChunks = false) {
             if (this.isRecording) {
                 console.warn('[VK Teams AudioRecorder] Already recording');
@@ -41,7 +38,6 @@
                 return false;
             }
 
-            // Check if MediaRecorder is supported
             if (!window.MediaRecorder) {
                 console.error('[VK Teams AudioRecorder] MediaRecorder API not supported');
                 this.emit('error', new Error('MediaRecorder API not supported'));
@@ -68,7 +64,6 @@
                     this.startTime = Date.now();
                 }
 
-                // Get audio tracks
                 const audioTracks = stream.getAudioTracks();
                 console.log('[VK Teams AudioRecorder] Audio tracks:', audioTracks.length);
 
@@ -76,7 +71,6 @@
                     throw new Error('No audio tracks in stream');
                 }
 
-                // Log track details and check if tracks are valid
                 let hasValidTrack = false;
                 audioTracks.forEach((track, index) => {
                     console.log(`[VK Teams AudioRecorder] Track ${index}:`, {
@@ -88,7 +82,6 @@
                         readyState: track.readyState
                     });
 
-                    // Check if at least one track is valid for recording
                     if (track.readyState === 'live' && track.enabled) {
                         hasValidTrack = true;
                     }
@@ -96,10 +89,8 @@
 
                 if (!hasValidTrack) {
                     console.warn('[VK Teams AudioRecorder] No valid tracks for recording (all tracks are either not live or disabled)');
-                    // Continue anyway - the recorder might still work
                 }
 
-                // Try different mime types in order of preference
                 const mimeTypes = [
                     'audio/webm;codecs=opus',
                     'audio/webm',
@@ -122,15 +113,11 @@
 
                 this.options.mimeType = selectedMimeType;
 
-                // Create MediaRecorder with minimal options first
                 console.log('[VK Teams AudioRecorder] Creating MediaRecorder...');
 
-                // Try to create a new MediaStream from tracks
-                // This can help with remote streams that may not record properly
                 let recordingStream = stream;
 
                 try {
-                    // Create new stream from cloned tracks
                     const clonedTracks = audioTracks.map(track => track.clone());
                     recordingStream = new MediaStream(clonedTracks);
                     console.log('[VK Teams AudioRecorder] Created new MediaStream from cloned tracks');
@@ -140,7 +127,6 @@
                 }
 
                 try {
-                    // Try with audioBitsPerSecond
                     this.recorder = new MediaRecorder(recordingStream, {
                         mimeType: selectedMimeType,
                         audioBitsPerSecond: this.options.audioBitsPerSecond
@@ -148,7 +134,6 @@
                     console.log('[VK Teams AudioRecorder] MediaRecorder created with audioBitsPerSecond');
                 } catch (error) {
                     console.warn('[VK Teams AudioRecorder] Failed with audioBitsPerSecond, trying without:', error);
-                    // Try without audioBitsPerSecond
                     try {
                         this.recorder = new MediaRecorder(recordingStream, {
                             mimeType: selectedMimeType
@@ -156,13 +141,11 @@
                         console.log('[VK Teams AudioRecorder] MediaRecorder created without audioBitsPerSecond');
                     } catch (error2) {
                         console.warn('[VK Teams AudioRecorder] Failed with mimeType, trying with defaults:', error2);
-                        // Last resort: try with no options at all
                         this.recorder = new MediaRecorder(recordingStream);
                         console.log('[VK Teams AudioRecorder] MediaRecorder created with default options');
                     }
                 }
 
-                // Handle data available event
                 this.recorder.ondataavailable = (event) => {
                     if (event.data && event.data.size > 0) {
                         this.chunks.push(event.data);
@@ -181,20 +164,17 @@
                     }
                 };
 
-                // Handle stop event
                 this.recorder.onstop = () => {
                     console.log('[VK Teams AudioRecorder] Recording stopped');
                     this.isRecording = false;
                 };
 
-                // Handle error event
                 this.recorder.onerror = (error) => {
                     console.error('[VK Teams AudioRecorder] Recorder error:', error);
                     this.isRecording = false;
                     this.emit('error', error);
                 };
 
-                // Start recording
                 console.log('[VK Teams AudioRecorder] 🎙️ Starting recorder.start() with timeslice:', this.options.timeslice);
                 this.recorder.start(this.options.timeslice);
                 this.isRecording = true;
@@ -227,7 +207,6 @@
             }
         }
 
-        // Stop recording
         stopRecording() {
             if (!this.isRecording) {
                 console.warn('[VK Teams AudioRecorder] Not recording');
@@ -242,7 +221,6 @@
             try {
                 this.recorder.stop();
 
-                // Create blob from chunks
                 const blob = new Blob(this.chunks, {
                     type: this.options.mimeType
                 });
@@ -263,7 +241,6 @@
 
                 this.emit('recordingStopped', recordingData);
 
-                // Clean up
                 this.recorder = null;
                 this.stream = null;
                 this.isRecording = false;
@@ -276,7 +253,6 @@
             }
         }
 
-        // Restart recording with a new stream (keeping existing chunks)
         async restartRecording(newStream) {
             console.log('[VK Teams AudioRecorder] ═══════════════════════════════════════════');
             console.log('[VK Teams AudioRecorder] ⚠️⚠️⚠️ RESTART RECORDING CALLED');
@@ -308,14 +284,12 @@
             })));
 
             try {
-                // Silently stop current recorder without emitting event
                 if (this.recorder && this.recorder.state !== 'inactive') {
                     console.log('[VK Teams AudioRecorder] 🛑 Stopping current recorder...');
                     console.log('[VK Teams AudioRecorder]   Current recorder state:', this.recorder.state);
                     this.recorder.stop();
                     console.log('[VK Teams AudioRecorder]   Recorder.stop() called');
 
-                    // Wait a bit for recorder to fully stop
                     console.log('[VK Teams AudioRecorder]   Waiting 100ms for recorder to stop...');
                     await new Promise(resolve => setTimeout(resolve, 100));
                     console.log('[VK Teams AudioRecorder]   ✓ Wait completed');
@@ -323,13 +297,11 @@
                     console.log('[VK Teams AudioRecorder]   Recorder already inactive or null');
                 }
 
-                // Keep chunks and isRecording flag
                 console.log('[VK Teams AudioRecorder] 💾 Saving chunks before reset...');
                 const savedChunks = [...this.chunks];
                 const savedStartTime = this.startTime;
                 console.log('[VK Teams AudioRecorder]   Saved', savedChunks.length, 'chunks');
 
-                // Reset state but keep isRecording true
                 console.log('[VK Teams AudioRecorder] 🔄 Resetting state...');
                 this.recorder = null;
                 this.stream = null;
@@ -339,7 +311,6 @@
                 console.log('[VK Teams AudioRecorder] 🚀 Starting new recorder with existing chunks...');
                 console.log('[VK Teams AudioRecorder]   Calling startRecording(newStream, keepExistingChunks=true)');
 
-                // Start new recording with existing chunks
                 const success = await this.startRecording(newStream, true);
 
                 console.log('[VK Teams AudioRecorder] 📊 startRecording() returned:', success);
@@ -355,7 +326,6 @@
                     console.log('[VK Teams AudioRecorder]   recorder state:', this.recorder?.state);
                     console.log('[VK Teams AudioRecorder]   new stream:', this.stream?.id);
                 } else {
-                    // Restore chunks if restart failed
                     console.error('[VK Teams AudioRecorder] ═══════════════════════════════════════════');
                     console.error('[VK Teams AudioRecorder] ❌❌❌ FAILED TO RESTART!');
                     console.error('[VK Teams AudioRecorder] ═══════════════════════════════════════════');
@@ -377,7 +347,6 @@
             }
         }
 
-        // Pause recording
         pauseRecording() {
             if (!this.isRecording || !this.recorder) {
                 console.warn('[VK Teams AudioRecorder] Cannot pause - not recording');
@@ -393,7 +362,6 @@
             return false;
         }
 
-        // Resume recording
         resumeRecording() {
             if (!this.isRecording || !this.recorder) {
                 console.warn('[VK Teams AudioRecorder] Cannot resume - not recording');
@@ -409,7 +377,6 @@
             return false;
         }
 
-        // Get current recording state
         getState() {
             if (!this.recorder) {
                 return 'inactive';
@@ -417,7 +384,6 @@
             return this.recorder.state;
         }
 
-        // Get recording duration
         getDuration() {
             if (!this.startTime) {
                 return 0;
@@ -425,12 +391,10 @@
             return Date.now() - this.startTime;
         }
 
-        // Get total recorded size
         getTotalSize() {
             return this.chunks.reduce((total, chunk) => total + chunk.size, 0);
         }
 
-        // Event system
         on(eventName, handler) {
             if (this.eventHandlers[eventName]) {
                 this.eventHandlers[eventName].push(handler);
@@ -458,12 +422,10 @@
             }
         }
 
-        // Check MediaRecorder support
         static isSupported() {
             return typeof MediaRecorder !== 'undefined';
         }
 
-        // Get supported mime types
         static getSupportedMimeTypes() {
             const types = [
                 'audio/webm;codecs=opus',
@@ -476,7 +438,6 @@
         }
     }
 
-    // Export to global scope
     window.VKTeamsCallRecording = window.VKTeamsCallRecording || {};
     window.VKTeamsCallRecording.AudioRecorder = AudioRecorder;
 

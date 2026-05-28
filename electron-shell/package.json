@@ -1,0 +1,14 @@
+{
+  "name": "vk-workspace-custom-shell",
+  "version": "1.0.0",
+  "description": "Desktop shell for VK WorkSpace with vk-teams-custom extension baked in",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:url": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}

@@ -1,5 +1,3 @@
-// VK Teams Call Recording - Manager
-// Integrates CallDetector, AudioRecorder, and StorageManager
 
 (function() {
     'use strict';
@@ -18,18 +16,15 @@
             console.log('[VK Teams CallRecordingManager] Initialized');
         }
 
-        // Initialize all modules
         async init() {
             console.log('[VK Teams CallRecordingManager] Initializing modules...');
 
-            // Check if modules are loaded
             if (!window.VKTeamsCallRecording) {
                 throw new Error('Call recording modules not loaded');
             }
 
             const { CallDetector, AudioRecorder, StorageManager, AudioTranscription } = window.VKTeamsCallRecording;
 
-            // Load settings
             const settings = await this.loadSettings();
             this.isEnabled = settings.callRecordingEnabled || false;
             this.autoAnswer = settings.autoAnswerCalls || false;
@@ -43,14 +38,11 @@
                 useLLMForSpeakers: this.useLLMForSpeakers
             });
 
-            // Initialize storage
             this.storageManager = new StorageManager();
             await this.storageManager.init();
 
-            // Initialize audio recorder
             this.audioRecorder = new AudioRecorder();
 
-            // Initialize audio transcription
             this.audioTranscription = new AudioTranscription();
             await this.audioTranscription.init();
             if (this.audioTranscription.isAvailable()) {
@@ -59,17 +51,14 @@
                 console.log('[VK Teams CallRecordingManager] Audio transcription not configured');
             }
 
-            // Initialize call detector
             console.log('[VK Teams CallRecordingManager] Initializing CallDetector with autoAnswer:', this.autoAnswer);
             this.callDetector = new CallDetector({
                 autoAnswer: this.autoAnswer
             });
             console.log('[VK Teams CallRecordingManager] CallDetector.options.autoAnswer:', this.callDetector.options.autoAnswer);
 
-            // Setup event handlers
             this.setupEventHandlers();
 
-            // Start detection if enabled
             if (this.isEnabled) {
                 this.start();
             }
@@ -77,25 +66,19 @@
             console.log('[VK Teams CallRecordingManager] Initialization complete');
         }
 
-        // Setup event handlers to connect modules
         setupEventHandlers() {
-            // Handle incoming call
             this.callDetector.on('incomingCall', (callInfo) => {
                 console.log('[VK Teams CallRecordingManager] Incoming call:', callInfo.callerName);
-                // Auto-answer is handled by CallDetector
             });
 
-            // Handle call answered
             this.callDetector.on('callAnswered', (callInfo) => {
                 console.log('[VK Teams CallRecordingManager] Call answered:', callInfo.callerName);
             });
 
-            // Handle call started
             this.callDetector.on('callStarted', (callInfo) => {
                 console.log('[VK Teams CallRecordingManager] Call started, starting recording...');
 
                 if (this.isEnabled) {
-                    // Check if already recording to prevent duplicate start attempts
                     if (this.audioRecorder.isRecording) {
                         console.warn('[VK Teams CallRecordingManager] Already recording, ignoring duplicate call start event');
                         return;
@@ -104,7 +87,6 @@
                 }
             });
 
-            // Handle streams updated (participants joined/left)
             this.callDetector.on('streamsUpdated', async (callInfo) => {
                 console.log('[VK Teams CallRecordingManager] ⚠️⚠️⚠️ STREAMS UPDATED EVENT RECEIVED!');
                 console.log('[VK Teams CallRecordingManager] Event data:', {
@@ -127,7 +109,6 @@
 
                 console.log('[VK Teams CallRecordingManager] 🔄 Starting seamless recording restart...');
 
-                // Log current recording state BEFORE restart
                 console.log('[VK Teams CallRecordingManager] 📊 Current recording state:', {
                     chunks: this.audioRecorder.chunks?.length || 0,
                     duration: this.audioRecorder.getDuration(),
@@ -135,7 +116,6 @@
                     recorderState: this.audioRecorder.getState()
                 });
 
-                // Cleanup old mixer
                 if (this.audioMixer) {
                     console.log('[VK Teams CallRecordingManager] 🧹 Cleaning up old mixer...');
                     this.audioMixer.cleanup();
@@ -143,7 +123,6 @@
                     console.log('[VK Teams CallRecordingManager] ✓ Old mixer cleaned up');
                 }
 
-                // Log incoming streams
                 console.log('[VK Teams CallRecordingManager] 📥 Incoming streams:', callInfo.streams.map((s, i) => ({
                     index: i,
                     id: s.id,
@@ -156,7 +135,6 @@
                     }))
                 })));
 
-                // Create new mixed stream from updated streams
                 let newRecordingStream;
                 if (callInfo.streams && callInfo.streams.length > 1) {
                     console.log('[VK Teams CallRecordingManager] 🎛️ Mixing', callInfo.streams.length, 'updated streams...');
@@ -196,7 +174,6 @@
                     return;
                 }
 
-                // Seamlessly restart recording with new stream (keeps all chunks)
                 console.log('[VK Teams CallRecordingManager] 🚀 Calling audioRecorder.restartRecording()...');
                 const success = await this.audioRecorder.restartRecording(newRecordingStream);
 
@@ -213,7 +190,6 @@
                 }
             });
 
-            // Handle call ended
             this.callDetector.on('callEnded', (callInfo) => {
                 console.log('[VK Teams CallRecordingManager] Call ended');
 
@@ -222,7 +198,6 @@
                 }
             });
 
-            // Handle recording stopped
             this.audioRecorder.on('recordingStopped', async (recordingData) => {
                 console.log('[VK Teams CallRecordingManager] Recording stopped, saving...');
 
@@ -233,15 +208,12 @@
                 }
             });
 
-            // Handle recording errors
             this.audioRecorder.on('error', (error) => {
                 console.error('[VK Teams CallRecordingManager] Recording error:', error);
             });
         }
 
-        // Start recording
         startRecording(callInfo) {
-            // Check if we have streams (array) or stream (single)
             const hasStreams = callInfo && callInfo.streams && callInfo.streams.length > 0;
             const hasStream = callInfo && callInfo.stream;
 
@@ -250,15 +222,12 @@
                 return false;
             }
 
-            // Get caller name from multiple sources
             let callerName = null;
 
-            // 1. Try to get from callInfo (already determined by detector)
             if (callInfo.callerName && callInfo.callerName !== 'Unknown') {
                 callerName = callInfo.callerName;
                 console.log('[VK Teams CallRecordingManager] Using caller name from callInfo:', callerName);
             }
-            // 2. Try from incoming call
             else if (this.callDetector.getIncomingCall()) {
                 const incomingCall = this.callDetector.getIncomingCall();
                 if (incomingCall.callerName && incomingCall.callerName !== 'Unknown') {
@@ -266,7 +235,6 @@
                     console.log('[VK Teams CallRecordingManager] Using caller name from incoming call:', callerName);
                 }
             }
-            // 3. Try to extract from UI directly
             if (!callerName || callerName === 'Unknown') {
                 const extractedName = this.callDetector.extractCallerNameFromUI();
                 if (extractedName) {
@@ -274,7 +242,6 @@
                     console.log('[VK Teams CallRecordingManager] Using caller name extracted from UI:', callerName);
                 }
             }
-            // 4. Final fallback
             if (!callerName) {
                 callerName = 'Unknown';
                 console.warn('[VK Teams CallRecordingManager] Could not determine caller name, using "Unknown"');
@@ -285,11 +252,9 @@
                 callerName: callerName
             };
 
-            // Determine which stream to use for recording
             let recordingStream;
 
             if (hasStreams && callInfo.streams.length > 1) {
-                // Multiple streams - mix them together
                 console.log('[VK Teams CallRecordingManager] Mixing', callInfo.streams.length, 'audio streams...');
 
                 const { AudioMixer } = window.VKTeamsCallRecording;
@@ -304,11 +269,9 @@
                     console.log('[VK Teams CallRecordingManager] Audio streams mixed successfully');
                 }
             } else if (hasStreams) {
-                // Single stream in array
                 recordingStream = callInfo.streams[0];
                 console.log('[VK Teams CallRecordingManager] Using single stream from array');
             } else {
-                // Legacy single stream
                 recordingStream = callInfo.stream;
                 console.log('[VK Teams CallRecordingManager] Using legacy single stream');
             }
@@ -324,7 +287,6 @@
             return success;
         }
 
-        // Stop recording
         stopRecording(callInfo) {
             const recordingData = this.audioRecorder.stopRecording();
 
@@ -334,7 +296,6 @@
                 console.error('[VK Teams CallRecordingManager] Failed to stop recording');
             }
 
-            // Cleanup audio mixer if it was used
             if (this.audioMixer) {
                 console.log('[VK Teams CallRecordingManager] Cleaning up audio mixer...');
                 this.audioMixer.cleanup();
@@ -344,7 +305,6 @@
             return recordingData;
         }
 
-        // Save recording to storage
         async saveRecording(recordingData) {
             if (!this.currentRecording) {
                 throw new Error('No current recording info');
@@ -360,10 +320,7 @@
 
                 console.log('[VK Teams CallRecordingManager] Recording saved:', saved.id);
 
-                // Start transcription in background if available and enabled
                 if (this.autoTranscribe && this.audioTranscription && this.audioTranscription.isAvailable()) {
-                    // Clone blob to ensure each transcription gets its own independent copy
-                    // This prevents race conditions when multiple calls end quickly
                     const blobClone = recordingData.blob.slice(0, recordingData.blob.size, recordingData.blob.type);
 
                     console.log('[VK Teams CallRecordingManager] ★★★ Starting transcription for recording:', {
@@ -390,7 +347,6 @@
             }
         }
 
-        // Transcribe recording and save result
         async transcribeRecording(recordingId, audioBlob) {
             try {
                 console.log('[VK Teams CallRecordingManager] ★★★ Transcribing recording:', {
@@ -414,7 +370,6 @@
                     timestamp: new Date().toISOString()
                 });
 
-                // Format transcription with speaker separation using LLM (if enabled)
                 let formattedTranscription = null;
                 if (this.useLLMForSpeakers) {
                     try {
@@ -427,7 +382,6 @@
                     console.log('[VK Teams CallRecordingManager] Speaker separation disabled, using raw transcription');
                 }
 
-                // Update recording with transcription
                 await this.storageManager.updateRecording(recordingId, {
                     transcription: transcription.text, // Raw transcription
                     transcriptionFormatted: formattedTranscription, // Formatted with speakers
@@ -450,7 +404,6 @@
             }
         }
 
-        // Start call detection
         start() {
             if (!this.callDetector) {
                 console.error('[VK Teams CallRecordingManager] Call detector not initialized');
@@ -462,7 +415,6 @@
             return true;
         }
 
-        // Stop call detection
         stop() {
             if (!this.callDetector) {
                 return false;
@@ -473,7 +425,6 @@
             return true;
         }
 
-        // Enable recording
         async enable() {
             this.isEnabled = true;
             await this.saveSettings();
@@ -481,7 +432,6 @@
             console.log('[VK Teams CallRecordingManager] Recording enabled');
         }
 
-        // Disable recording
         async disable() {
             this.isEnabled = false;
             await this.saveSettings();
@@ -489,7 +439,6 @@
             console.log('[VK Teams CallRecordingManager] Recording disabled');
         }
 
-        // Set auto-answer
         async setAutoAnswer(enabled) {
             this.autoAnswer = enabled;
             if (this.callDetector) {
@@ -499,7 +448,6 @@
             console.log('[VK Teams CallRecordingManager] Auto-answer:', enabled);
         }
 
-        // Load settings from chrome.storage
         async loadSettings() {
             return new Promise((resolve) => {
                 chrome.storage.sync.get(['callRecordingEnabled', 'autoAnswerCalls', 'autoTranscribe', 'useLLMForSpeakers'], (result) => {
@@ -513,7 +461,6 @@
             });
         }
 
-        // Save settings to chrome.storage
         async saveSettings() {
             return new Promise((resolve) => {
                 chrome.storage.sync.set({
@@ -523,11 +470,9 @@
             });
         }
 
-        // Format transcription with speaker separation using LLM
         async formatTranscriptionWithSpeakers(transcription) {
             console.log('[VK Teams CallRecordingManager] Formatting transcription with speakers...');
 
-            // Get AI config from storage
             const aiConfig = await new Promise((resolve) => {
                 chrome.storage.sync.get(['aiConfig'], (result) => {
                     resolve(result.aiConfig);
@@ -539,7 +484,6 @@
                 return null;
             }
 
-            // Build prompt with segments if available
             let promptText = 'Это транскрипция разговора в VK Teams. Определи всех участников и раздели текст на их реплики.\n\n';
 
             if (transcription.segments && transcription.segments.length > 0) {
@@ -554,7 +498,6 @@
             promptText += '\n\nФормат ответа:\nУчастник 1: [текст реплики]\nУчастник 2: [текст реплики]\nУчастник 3: [текст реплики]\n...\n\nОпредели количество участников и кто говорит каждую реплику, основываясь на контексте, паузах, вопросах и ответах, обращениях. Если участников больше двух, пронумеруй их всех. Отвечай ТОЛЬКО в указанном формате, без дополнительных комментариев.';
 
             try {
-                // Send to background script for LLM processing
                 const response = await new Promise((resolve, reject) => {
                     chrome.runtime.sendMessage({
                         action: 'chatCompletion',
@@ -584,12 +527,10 @@
             }
         }
 
-        // Get storage manager (for popup to access recordings)
         getStorageManager() {
             return this.storageManager;
         }
 
-        // Get statistics
         async getStats() {
             if (!this.storageManager) {
                 return null;
@@ -598,7 +539,6 @@
         }
     }
 
-    // Export to global scope
     window.VKTeamsCallRecording = window.VKTeamsCallRecording || {};
     window.VKTeamsCallRecording.CallRecordingManager = CallRecordingManager;
 

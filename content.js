@@ -1,67 +1,98 @@
-// VK Teams Custom Reactions - Content Script
-// This runs in the context of VK Teams page
-
 (function() {
     'use strict';
 
-    console.log('[VK Teams Custom Reactions] Extension loaded!');
-    console.log('[VK Teams Custom Reactions] URL:', window.location.href);
-
-    // Configuration (defaults for on-prem / custom domain; VK WorkSpace SaaS: set in extension popup → RAPI)
-    const DEFAULT_RAPI_URL = 'https://u.teams.your-organization.com';
-    const DEFAULT_RAPI_API_VERSION = '125';
+    const DEFAULT_RAPI_URL = 'https://u.myteam.vmailru.net';
+    const DEFAULT_RAPI_API_VERSION = '145';
     let RAPI_URL = DEFAULT_RAPI_URL;
     let RAPI_API_VERSION = DEFAULT_RAPI_API_VERSION;
 
-    function loadRapiConfig() {
+    function readConnectionFromStorage() {
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['rapiBaseUrl', 'rapiApiVersion'], (r) => {
-                RAPI_URL = DEFAULT_RAPI_URL;
-                RAPI_API_VERSION = DEFAULT_RAPI_API_VERSION;
-                if (r.rapiBaseUrl && typeof r.rapiBaseUrl === 'string' && r.rapiBaseUrl.trim()) {
-                    RAPI_URL = r.rapiBaseUrl.trim().replace(/\/$/, '');
+            if (window.VKTeamsConnectionStorage) {
+                window.VKTeamsConnectionStorage.read().then(resolve).catch(() => resolve({}));
+                return;
+            }
+            chrome.storage.local.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], (local) => {
+                const hasLocal =
+                    (local.customAimsid && String(local.customAimsid).trim()) ||
+                    (local.rapiBaseUrl && String(local.rapiBaseUrl).trim());
+                if (hasLocal) {
+                    resolve(local);
+                    return;
                 }
-                if (r.rapiApiVersion != null && String(r.rapiApiVersion).trim() !== '') {
-                    RAPI_API_VERSION = String(r.rapiApiVersion).trim();
-                }
-                console.log('[VK Teams Custom Reactions] RAPI:', RAPI_URL, 'API v' + RAPI_API_VERSION);
-                resolve();
+                chrome.storage.sync.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], resolve);
             });
+        });
+    }
+
+    function loadRapiConfig() {
+        return readConnectionFromStorage().then((r) => {
+            RAPI_URL = DEFAULT_RAPI_URL;
+            RAPI_API_VERSION = DEFAULT_RAPI_API_VERSION;
+            if (r.rapiBaseUrl && typeof r.rapiBaseUrl === 'string' && r.rapiBaseUrl.trim()) {
+                RAPI_URL = r.rapiBaseUrl.trim().replace(/\/$/, '');
+            }
+            if (r.rapiApiVersion != null && String(r.rapiApiVersion).trim() !== '') {
+                RAPI_API_VERSION = String(r.rapiApiVersion).trim();
+            }
         });
     }
 
     function loadAimsidConfig() {
-        return new Promise((resolve) => {
-            chrome.storage.sync.get(['customAimsid'], (r) => {
-                const stored = (r.customAimsid && typeof r.customAimsid === 'string') ? r.customAimsid.trim() : '';
-                if (stored) {
-                    aimsid = stored;
-                    console.log('[VK Teams Custom Reactions] AIMSID loaded from extension settings');
-                } else {
-                    aimsid = getAIMSID();
-                    if (aimsid) {
-                        console.log('[VK Teams Custom Reactions] AIMSID auto-detected from page');
-                    }
-                }
-                resolve();
-            });
+        return readConnectionFromStorage().then((r) => {
+            const stored = (r.customAimsid && typeof r.customAimsid === 'string') ? r.customAimsid.trim() : '';
+            aimsid = stored || getAIMSID();
         });
     }
 
-    function loadConnectionConfig() {
-        return loadRapiConfig().then(() => loadAimsidConfig());
+    function mirrorConnectionToPageStorage() {
+        try {
+            localStorage.setItem('vkteams_rapi_url', RAPI_URL);
+            localStorage.setItem('vkteams_rapi_ver', RAPI_API_VERSION);
+            if (aimsid) {
+                localStorage.setItem('vkteams_custom_aimsid', aimsid);
+            }
+        } catch (e) {
+            /* ignore */
+        }
     }
+
+    function loadConnectionConfig() {
+        return loadRapiConfig().then(() => loadAimsidConfig()).then(() => {
+            mirrorConnectionToPageStorage();
+        });
+    }
+
+    window.addEventListener('message', (event) => {
+        if (event.source !== window || !event.data || event.data.source !== 'vkteams-inject') {
+            return;
+        }
+        if (event.data.type === 'setReaction') {
+            ackInjectReactionHandled();
+            loadConnectionConfig().then(() => {
+                setReaction(event.data.messageId, event.data.chatId, event.data.reaction);
+            });
+        }
+    });
+
+    function ackInjectReactionHandled() {
+        try {
+            window.postMessage({
+                source: 'vkteams-reactions-extension',
+                type: 'setReactionAck'
+            }, '*');
+        } catch (e) {
+            /* ignore */
+        }
+    }
+
     const DEFAULT_REACTIONS = ['🤨', '🙄', '🥱', '😭', '🥶', '🤮', '🥺', '💀', '🦧', '🔇'];
     const MAX_REACTIONS = 30;
 
-    // State
     let aimsid = null;
     let activePopup = null;
     let CUSTOM_REACTIONS = [...DEFAULT_REACTIONS];
     let aiManager = null;
-
-    // === Utility Functions ===
-
     function closeActiveReactionPopup() {
         if (!activePopup) {
             return;
@@ -73,10 +104,6 @@
         }
         activePopup = null;
     }
-
-    /**
-     * Parse emoji list from array or string (spaces, commas, or consecutive emojis).
-     */
     function parseReactionsInput(input) {
         if (input == null) {
             return null;
@@ -105,10 +132,6 @@
         }
         return [...trimmed];
     }
-
-    /**
-     * Apply reactions at runtime (popup, storage, or console API).
-     */
     function applyReactions(reactions, options = {}) {
         const { persist = false, source = 'unknown' } = options;
         const parsed = parseReactionsInput(reactions);
@@ -119,8 +142,7 @@
         CUSTOM_REACTIONS = parsed.slice(0, MAX_REACTIONS);
         closeActiveReactionPopup();
         syncReactionsPageAttribute();
-        console.log('[VK Teams Custom Reactions] Applied (%s):', source, CUSTOM_REACTIONS);
-        if (persist && chrome.storage && chrome.storage.sync) {
+        if (persist && chrome.storage) {
             persistReactionsToStorage();
         }
         return true;
@@ -141,7 +163,7 @@
     }
 
     function persistReactionsToStorage() {
-        chrome.storage.sync.get(['reactionSets', 'activeReactionSetId'], (result) => {
+        const apply = (result) => {
             const sets = Array.isArray(result.reactionSets) ? result.reactionSets : [];
             const activeId = result.activeReactionSetId;
             const payload = { customReactions: CUSTOM_REACTIONS };
@@ -153,16 +175,32 @@
                 ));
                 payload.activeReactionSetId = activeId;
             }
-            chrome.storage.sync.set(payload);
+            if (window.VKTeamsReactionStorage) {
+                window.VKTeamsReactionStorage.write(payload);
+                return;
+            }
+            chrome.storage.local.set(payload, () => {
+                if (chrome.runtime.lastError) {
+                    console.error('[VK Teams Custom Reactions] save failed:', chrome.runtime.lastError.message);
+                }
+            });
+        };
+
+        if (window.VKTeamsReactionStorage) {
+            window.VKTeamsReactionStorage.read().then(apply);
+            return;
+        }
+        chrome.storage.local.get(['reactionSets', 'activeReactionSetId'], (local) => {
+            if (Array.isArray(local.reactionSets) && local.reactionSets.length) {
+                apply(local);
+                return;
+            }
+            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId'], apply);
         });
     }
-
-    /**
-     * Load custom reactions from storage
-     */
     function loadCustomReactions() {
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
+            const finish = (result) => {
                 const reactions = resolveReactionsFromStorage(result);
                 if (reactions) {
                     applyReactions(reactions, { persist: false, source: 'storage' });
@@ -170,21 +208,52 @@
                     applyReactions(DEFAULT_REACTIONS, { persist: false, source: 'defaults' });
                 }
                 resolve();
+            };
+
+            if (window.VKTeamsReactionStorage) {
+                window.VKTeamsReactionStorage.read().then(finish).catch(() => finish({}));
+                return;
+            }
+            chrome.storage.local.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (local) => {
+                if (Array.isArray(local.reactionSets) && local.reactionSets.length) {
+                    finish(local);
+                    return;
+                }
+                chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], finish);
             });
         });
     }
 
+    function onReactionStorageChanged() {
+        const reload = (result) => {
+            const reactions = resolveReactionsFromStorage(result);
+            if (reactions) {
+                applyReactions(reactions, { persist: false, source: 'storage-change' });
+            }
+        };
+        if (window.VKTeamsReactionStorage) {
+            window.VKTeamsReactionStorage.read().then(reload);
+            return;
+        }
+        chrome.storage.local.get(['reactionSets', 'activeReactionSetId', 'customReactions'], reload);
+    }
+
+    if (window.VKTeamsReactionStorage) {
+        window.VKTeamsReactionStorage.onChanged(onReactionStorageChanged);
+    }
+
     chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName !== 'sync') {
+        if (areaName !== 'local' && areaName !== 'sync') {
             return;
         }
         if (changes.customReactions || changes.reactionSets || changes.activeReactionSetId) {
-            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
-                const reactions = resolveReactionsFromStorage(result);
-                if (reactions) {
-                    applyReactions(reactions, { persist: false, source: 'storage-sync' });
-                }
-            });
+            onReactionStorageChanged();
+        }
+        if (changes.customAimsid || changes.rapiBaseUrl || changes.rapiApiVersion) {
+            loadConnectionConfig();
+        }
+        if (changes.extensionActivated) {
+            init();
         }
     });
 
@@ -198,16 +267,12 @@
             /* ignore */
         }
     }
-
-    /** API in isolated content-script world (DevTools → контекст расширения) */
     window.__vkTeamsReactions = {
         get: () => [...CUSTOM_REACTIONS],
         defaults: () => [...DEFAULT_REACTIONS],
         set: (reactions, persist = true) => applyReactions(reactions, { persist, source: 'console' }),
         reset: () => applyReactions(DEFAULT_REACTIONS, { persist: true, source: 'console-reset' })
     };
-
-    /** Bridge into page context so F12 (top) console can call __vkTeamsReactions */
     function installPageConsoleBridge() {
         if (document.documentElement.getAttribute('data-vk-teams-reactions-bridge')) {
             syncReactionsPageAttribute();
@@ -257,10 +322,6 @@
     }
 
     installPageConsoleBridge();
-
-    /**
-     * Listen for messages from popup
-     */
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'reloadReactions') {
             if (message.reactions) {
@@ -311,90 +372,41 @@
         }
 
         if (message.action === 'extensionActivated') {
-            console.log('[VK Teams Extension] Received activation notification. Reinitializing...');
             init();
             sendResponse({ success: true });
             return false;
         }
     });
+    const AIMSID_PATTERN = /\d{3}\.\d+\.\d+:[a-zA-Z0-9.@_-]+/;
 
-    /**
-     * Get AIMSID from cookies or localStorage
-     */
-    function getAIMSID() {
-        console.log('[VK Teams Custom Reactions] Searching for AIMSID...');
-
-        // Try cookies first
-        console.log('[VK Teams Custom Reactions] Checking cookies...');
-        const cookies = document.cookie.split(';');
-        for (let cookie of cookies) {
-            const [name, value] = cookie.trim().split('=');
-            if (name === 'aimsid') {
-                console.log('[VK Teams Custom Reactions] AIMSID found in cookies!');
-                return value;
-            }
-        }
-
-        // Try localStorage
-        console.log('[VK Teams Custom Reactions] Checking localStorage...');
+    function scanStorageForAimsid(storage) {
         try {
-            const localStorageKeys = Object.keys(localStorage);
-            console.log('[VK Teams Custom Reactions] localStorage keys:', localStorageKeys);
-
-            for (let key of localStorageKeys) {
-                const value = localStorage.getItem(key);
-                if (key.includes('aimsid') || (value && value.includes('aimsid'))) {
-                    console.log('[VK Teams Custom Reactions] Found aimsid-related key:', key);
+            for (const key of Object.keys(storage)) {
+                const value = storage.getItem(key);
+                if (!value || typeof value !== 'string') {
+                    continue;
                 }
-
-                // Check if value contains aimsid pattern
-                if (value && typeof value === 'string') {
-                    // Pattern: numbers.numbers.numbers:email
-                    const aimsidPattern = /\d{3}\.\d+\.\d+:[a-zA-Z0-9.@_-]+/;
-                    const match = value.match(aimsidPattern);
-                    if (match) {
-                        console.log('[VK Teams Custom Reactions] AIMSID found in localStorage key:', key);
-                        return match[0];
-                    }
+                const match = value.match(AIMSID_PATTERN);
+                if (match) {
+                    return match[0];
                 }
             }
         } catch (e) {
-            console.error('[VK Teams Custom Reactions] Error reading localStorage:', e);
+            /* ignore */
         }
-
-        // Try sessionStorage
-        console.log('[VK Teams Custom Reactions] Checking sessionStorage...');
-        try {
-            const sessionStorageKeys = Object.keys(sessionStorage);
-            console.log('[VK Teams Custom Reactions] sessionStorage keys:', sessionStorageKeys);
-
-            for (let key of sessionStorageKeys) {
-                const value = sessionStorage.getItem(key);
-                if (key.includes('aimsid') || (value && value.includes('aimsid'))) {
-                    console.log('[VK Teams Custom Reactions] Found aimsid-related key:', key);
-                }
-
-                // Check if value contains aimsid pattern
-                if (value && typeof value === 'string') {
-                    const aimsidPattern = /\d{3}\.\d+\.\d+:[a-zA-Z0-9.@_-]+/;
-                    const match = value.match(aimsidPattern);
-                    if (match) {
-                        console.log('[VK Teams Custom Reactions] AIMSID found in sessionStorage key:', key);
-                        return match[0];
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('[VK Teams Custom Reactions] Error reading sessionStorage:', e);
-        }
-
-        console.warn('[VK Teams Custom Reactions] AIMSID not found anywhere');
         return null;
     }
 
-    /**
-     * Generate UUID for request ID
-     */
+    function getAIMSID() {
+        const cookies = document.cookie.split(';');
+        for (const cookie of cookies) {
+            const [name, value] = cookie.trim().split('=');
+            if (name === 'aimsid' && value) {
+                return value;
+            }
+        }
+        return scanStorageForAimsid(localStorage) || scanStorageForAimsid(sessionStorage);
+    }
     function generateUUID() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
             const r = Math.random() * 16 | 0;
@@ -402,10 +414,6 @@
             return v.toString(16);
         });
     }
-
-    /**
-     * Show notification
-     */
     function showNotification(message, type = 'success') {
         const notification = document.createElement('div');
         notification.textContent = message;
@@ -431,10 +439,6 @@
             setTimeout(() => notification.remove(), 300);
         }, 3000);
     }
-
-    /**
-     * Set reaction via RAPI
-     */
     function setReaction(messageId, chatId, reaction) {
         if (!aimsid) {
             aimsid = getAIMSID();
@@ -444,75 +448,40 @@
             return;
         }
 
-        // Create body with msgId as string, then manually convert to number in JSON
-        const bodyForLog = {
-            reqId: generateUUID(),
-            aimsid: aimsid,
-            params: {
-                msgId: messageId,
-                chatId: chatId,
-                reactions: CUSTOM_REACTIONS,
-                reaction: reaction
-            }
-        };
-
-        console.log('[VK Teams Custom Reactions] Setting reaction:', { messageId, chatId, reaction });
-        console.log('[VK Teams Custom Reactions] Request body (before serialization):', bodyForLog);
-
-        // Manually construct JSON to preserve large integer precision
         const reqId = generateUUID();
         const jsonBody = `{"reqId":"${reqId}","aimsid":"${aimsid}","params":{"msgId":${messageId},"chatId":"${chatId}","reactions":${JSON.stringify(CUSTOM_REACTIONS)},"reaction":"${reaction}"}}`;
-
-        console.log('[VK Teams Custom Reactions] JSON body:', jsonBody);
 
         fetch(`${RAPI_URL}/api/v${RAPI_API_VERSION}/rapi/reaction/add`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'text/plain',
-                // MyTeam / новый веб-клиент шлёт сессию так; без заголовка RAPI часто отвечает 40200 Invalid token
                 'X-Teams-Aimsid': aimsid
             },
             body: jsonBody
         })
-        .then(response => {
-            console.log('[VK Teams Custom Reactions] HTTP Status:', response.status);
-            return response.text();
-        })
-        .then(text => {
-            console.log('[VK Teams Custom Reactions] Response text:', text);
-            const data = JSON.parse(text);
-            console.log('[VK Teams Custom Reactions] Parsed response:', data);
-            const statusCode = data.status?.code;
-            const statusDetail = data.status?.reason || data.status?.message || '';
+            .then((response) => response.text())
+            .then((text) => {
+                const data = JSON.parse(text);
+                const statusCode = data.status?.code;
+                const statusDetail = data.status?.reason || data.status?.message || '';
 
-            if (statusCode === 50000 || statusCode === 20000) {
-                showNotification(`✅ Reaction ${reaction} set!`);
-            } else if (statusCode === 40000) {
-                console.error('[VK Teams Custom Reactions] Error 40000 - Invalid request or parameters');
-                console.error('[VK Teams Custom Reactions] Full response:', JSON.stringify(data, null, 2));
-                showNotification(`❌ Error 40000: ${statusDetail || 'Invalid request'}`, 'error');
-            } else if (statusCode === 40200) {
-                console.error('[VK Teams Custom Reactions] 40200 Invalid token:', JSON.stringify(data, null, 2));
-                showNotification(`❌ Сессия (aimsid): ${statusDetail || 'Invalid token'}. Обновите страницу мессенджера или войдите заново.`, 'error');
-            } else {
-                console.error('[VK Teams Custom Reactions] Unexpected code:', statusCode);
-                console.error('[VK Teams Custom Reactions] Full response:', JSON.stringify(data, null, 2));
-                showNotification(`⚠️ ${statusCode}${statusDetail ? ': ' + statusDetail : ''}`, 'error');
-            }
-        })
-        .catch(error => {
-            console.error('[VK Teams Custom Reactions] Error:', error);
-            showNotification('❌ Network error', 'error');
-        });
+                if (statusCode === 50000 || statusCode === 20000) {
+                    showNotification(`✅ Reaction ${reaction} set!`);
+                } else if (statusCode === 40000) {
+                    showNotification(`❌ Error 40000: ${statusDetail || 'Invalid request'}`, 'error');
+                } else if (statusCode === 40200) {
+                    showNotification(`❌ Сессия (aimsid): ${statusDetail || 'Invalid token'}`, 'error');
+                } else {
+                    showNotification(`⚠️ ${statusCode}${statusDetail ? ': ' + statusDetail : ''}`, 'error');
+                }
+            })
+            .catch(() => {
+                showNotification('❌ Network error', 'error');
+            });
     }
 
-    /**
-     * Create emoji popup
-     */
     function createEmojiPopup(messageElement, messageId, chatId, buttonElement) {
-        console.log('[VK Teams Custom Reactions] Creating popup for message:', messageId);
-
         closeActiveReactionPopup();
 
         const popup = document.createElement('div');
@@ -525,7 +494,6 @@
 
             button.addEventListener('click', (e) => {
                 e.stopPropagation();
-                console.log('[VK Teams Custom Reactions] Emoji clicked:', emoji);
                 setReaction(messageId, chatId, emoji);
                 try {
                     popup.remove();
@@ -538,26 +506,20 @@
             popup.appendChild(button);
         });
 
-        // Position popup next to the button
         const buttonRect = buttonElement.getBoundingClientRect();
 
-        // Try to position to the right of the button
         let left = buttonRect.right + 10;
         let top = buttonRect.top;
 
-        // Check if popup would go off screen on the right
         const popupWidth = Math.min(520, CUSTOM_REACTIONS.length * 34 + 16);
         if (left + popupWidth > window.innerWidth) {
-            // Position to the left of button instead
             left = buttonRect.left - popupWidth - 10;
         }
 
-        // Make sure it's not off screen on the left
         if (left < 10) {
             left = 10;
         }
 
-        // Make sure it's not off screen vertically
         const popupHeight = 40;
         if (top + popupHeight > window.innerHeight) {
             top = window.innerHeight - popupHeight - 10;
@@ -569,10 +531,8 @@
         popup.style.left = `${left}px`;
         popup.style.top = `${top}px`;
 
-        // Append popup to body
         document.body.appendChild(popup);
         activePopup = popup;
-        console.log('[VK Teams Custom Reactions] Popup created at:', { left, top });
 
         setTimeout(() => {
             document.addEventListener('click', function closePopup(e) {
@@ -584,12 +544,7 @@
             });
         }, 100);
     }
-
-    /**
-     * Create AI popup window
-     */
     function createAiPopup(action, result, messageElement, chatId) {
-        // Close existing popup if any
         if (activePopup) {
             try {
                 activePopup.remove();
@@ -618,7 +573,6 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         `;
 
-        // Header
         const header = document.createElement('div');
         header.style.cssText = `
             display: flex;
@@ -676,7 +630,6 @@
         header.appendChild(title);
         header.appendChild(closeBtn);
 
-        // Content
         const content = document.createElement('div');
         content.style.cssText = `
             margin-bottom: 16px;
@@ -691,7 +644,6 @@
         `;
         content.textContent = result.text;
 
-        // Usage info (if available)
         const usageDiv = document.createElement('div');
         if (result.usage && result.usage.total_tokens > 0) {
             usageDiv.style.cssText = `
@@ -704,7 +656,6 @@
             content.appendChild(usageDiv);
         }
 
-        // Buttons
         const buttons = document.createElement('div');
         buttons.style.cssText = `
             display: flex;
@@ -722,7 +673,6 @@
             transition: all 0.2s;
         `;
 
-        // Copy button
         const copyBtn = document.createElement('button');
         copyBtn.textContent = 'Копировать';
         copyBtn.style.cssText = buttonStyle + `
@@ -743,7 +693,6 @@
             }, 2000);
         });
 
-        // Send button
         const sendBtn = document.createElement('button');
         sendBtn.textContent = 'Отправить';
         sendBtn.style.cssText = buttonStyle + `
@@ -757,7 +706,6 @@
             sendBtn.style.opacity = '1';
         });
         sendBtn.addEventListener('click', () => {
-            // Try multiple selectors to find the input field (ProseMirror editor)
             let inputField = document.querySelector('.ProseMirror[contenteditable="true"]');
 
             if (!inputField) {
@@ -777,7 +725,6 @@
             }
 
             if (!inputField) {
-                // Log all potential input fields for debugging
                 console.log('[VK Teams AI] Looking for input field...');
                 const allEditables = document.querySelectorAll('[contenteditable="true"]');
                 console.log('[VK Teams AI] Found contenteditable elements:', allEditables.length);
@@ -787,23 +734,18 @@
             }
 
             if (inputField) {
-                // For ProseMirror, we need to manipulate the paragraph element inside
                 let targetElement = inputField.querySelector('p');
                 if (!targetElement) {
                     targetElement = inputField;
                 }
 
-                // Clear existing content
                 targetElement.innerHTML = '';
 
-                // Insert text as text nodes
                 const textNode = document.createTextNode(result.text);
                 targetElement.appendChild(textNode);
 
-                // Focus the field
                 inputField.focus();
 
-                // Move cursor to end
                 const range = document.createRange();
                 const sel = window.getSelection();
                 range.selectNodeContents(targetElement);
@@ -811,7 +753,6 @@
                 sel.removeAllRanges();
                 sel.addRange(range);
 
-                // Trigger input event to notify VK Teams/ProseMirror
                 const inputEvent = new InputEvent('input', {
                     bubbles: true,
                     cancelable: true,
@@ -823,12 +764,10 @@
                 showNotification('✅ Текст вставлен в поле ввода');
                 console.log('[VK Teams AI] Text inserted successfully into ProseMirror');
 
-                // Auto-send if enabled
                 chrome.storage.sync.get(['aiConfig'], (result) => {
                     if (result.aiConfig && result.aiConfig.autoSend) {
                         console.log('[VK Teams AI] Auto-send enabled, clicking send button');
 
-                        // Find and click the send button
                         setTimeout(() => {
                             const sendButton = document.querySelector('[data-testid="sendButton"]') ||
                                               document.querySelector('.common__send-uRrhw') ||
@@ -861,7 +800,6 @@
         document.body.appendChild(popup);
         activePopup = popup;
 
-        // Close on outside click
         setTimeout(() => {
             document.addEventListener('click', function closeAiPopup(e) {
                 if (!popup.contains(e.target)) {
@@ -872,10 +810,6 @@
             });
         }, 100);
     }
-
-    /**
-     * Show loading popup
-     */
     function showLoadingPopup(action) {
         if (activePopup) {
             try {
@@ -924,10 +858,6 @@
 
         return popup;
     }
-
-    /**
-     * Handle AI action
-     */
     async function handleAiAction(action, messageElement, chatId) {
         console.log('[VK Teams AI] AI action:', action);
 
@@ -936,7 +866,6 @@
             return;
         }
 
-        // Get message text - try multiple selectors
         let messageTextElement = messageElement.querySelector('.im-message__bubble-text');
         if (!messageTextElement) {
             messageTextElement = messageElement.querySelector('.im-message-text');
@@ -962,7 +891,6 @@
 
         console.log('[VK Teams AI] Message text:', messageText.substring(0, 100));
 
-        // Show loading
         const loadingPopup = showLoadingPopup(action);
 
         try {
@@ -979,7 +907,6 @@
                     result = await aiManager.translateMessage(messageText);
                     break;
                 case 'change-tone':
-                    // Show tone selection dialog
                     const toneChoice = prompt(
                         'Выберите тональность для переписывания сообщения:\n\n' +
                         '1 - Формальный (официальный, вежливый)\n' +
@@ -989,14 +916,12 @@
                     );
 
                     if (!toneChoice) {
-                        // User cancelled
                         if (loadingPopup && loadingPopup.parentNode) {
                             loadingPopup.parentNode.removeChild(loadingPopup);
                         }
                         return;
                     }
 
-                    // Map choice to tone
                     const toneMap = {
                         '1': 'formal',
                         '2': 'casual',
@@ -1010,10 +935,8 @@
                     result = await aiManager.explainForManager(messageText);
                     break;
                 case 'custom-prompt':
-                    // Show prompt input dialog
                     const customPrompt = prompt('Введите ваш промпт для AI (текст сообщения будет добавлен автоматически):');
                     if (!customPrompt) {
-                        // User cancelled
                         if (loadingPopup && loadingPopup.parentNode) {
                             loadingPopup.parentNode.removeChild(loadingPopup);
                         }
@@ -1023,18 +946,15 @@
                     break;
             }
 
-            // Remove loading popup
             if (loadingPopup && loadingPopup.parentNode) {
                 loadingPopup.remove();
             }
 
-            // Show result popup
             createAiPopup(action, result, messageElement, chatId);
 
         } catch (error) {
             console.error('[VK Teams AI] Error:', error);
 
-            // Remove loading popup
             if (loadingPopup && loadingPopup.parentNode) {
                 loadingPopup.remove();
             }
@@ -1132,10 +1052,6 @@
 
         return messages;
     }
-
-    /**
-     * Add reaction button to a message
-     */
     function addReactionButton(messageElement) {
         if (messageElement.querySelector('.vkteams-custom-reaction-btn')) {
             return;
@@ -1157,7 +1073,6 @@
             anchor.appendChild(quickMenuBlock);
         }
 
-        // Create button styled like native quick menu items
         const button = document.createElement('div');
         button.className = 'vkteams-custom-reaction-btn';
         button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><path fill="currentColor" d="M10 2.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zm-1.25 3.125a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0zm7.5 0a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0zM5.625 10a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zm8.75 0a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5zM10 13.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5z"/></svg>';
@@ -1184,7 +1099,6 @@
             `;
         }
 
-        // Add hover effect like native buttons
         button.addEventListener('mouseenter', () => {
             button.style.color = '#3f8ae0';
         });
@@ -1194,28 +1108,19 @@
         });
 
         button.addEventListener('click', (e) => {
-            console.log('[VK Teams Custom Reactions] Button clicked!', messageId);
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
             createEmojiPopup(messageElement, messageId, chatId, button);
         }, true);
 
-        // Add button to quick menu block
         quickMenuBlock.appendChild(button);
 
-        // Add AI buttons if AI is configured
         if (aiManager && aiManager.isConfigured()) {
             addAiButtons(messageElement, messageId, chatId, quickMenuBlock);
         }
-        // AI not configured - AI buttons will not be added
     }
-
-    /**
-     * Add AI buttons to quick menu
-     */
     function addAiButtons(messageElement, messageId, chatId, quickMenuBlock) {
-        // Check if AI buttons already added
         if (messageElement.querySelector('.vkteams-ai-btn')) {
             return;
         }
@@ -1257,7 +1162,6 @@
                 color: #818c99;
             `;
 
-            // Style the SVG
             const svg = aiButton.querySelector('svg');
             if (svg) {
                 svg.style.cssText = `
@@ -1267,7 +1171,6 @@
                 `;
             }
 
-            // Add hover effect
             aiButton.addEventListener('mouseenter', () => {
                 aiButton.style.color = '#3f8ae0';
             });
@@ -1276,7 +1179,6 @@
                 aiButton.style.color = '#818c99';
             });
 
-            // Add click handler
             aiButton.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1288,65 +1190,50 @@
             quickMenuBlock.appendChild(aiButton);
         });
     }
+    let loggedMessageCountFrame = false;
 
-    /**
-     * Process all messages
-     */
     function processMessages() {
         const messages = findMessageElements();
         if (messages.length) {
-            console.log('[VK Teams Custom Reactions] Found messages:', messages.length, 'frame:', window.location.href);
+            loggedMessageCountFrame = true;
         }
 
         messages.forEach((messageElement) => {
             addReactionButton(messageElement);
         });
     }
+    function runsInCustomShell() {
+        try {
+            return /VKTeamsCustomShell/i.test(navigator.userAgent);
+        } catch (e) {
+            return false;
+        }
+    }
 
-    /**
-     * Initialize
-     */
-    async function init() {
-        console.log('[VK Teams Custom Reactions] Initializing...');
-
-        // Check if extension is activated
-        const activationStatus = await new Promise(resolve => {
+    async function isExtensionEnabled() {
+        if (runsInCustomShell()) {
+            return true;
+        }
+        return new Promise((resolve) => {
             chrome.storage.sync.get(['extensionActivated'], (result) => {
-                resolve(result.extensionActivated || false);
+                resolve(!!result.extensionActivated);
             });
         });
-
-        if (!activationStatus) {
-            console.log('[VK Teams Extension] Extension not activated. Functionality blocked.');
-            return; // Stop initialization
+    }
+    async function init() {
+        if (!(await isExtensionEnabled())) {
+            return;
         }
 
-        console.log('[VK Teams Extension] Extension activated. Initializing...');
-
         await loadConnectionConfig();
-
-        // Load custom reactions from storage first
         await loadCustomReactions();
         installPageConsoleBridge();
-        console.log(
-            '[VK Teams Custom Reactions] Смена на лету: попап → «Наборы реакций»,',
-            'или F12: __vkTeamsReactions.set("🤨 🙄 🥱") / .get() / .reset()'
-        );
 
-        // Initialize AI Manager
         if (window.VKTeamsAI && window.VKTeamsAI.AIManager) {
             aiManager = new window.VKTeamsAI.AIManager();
             await aiManager.init();
-            console.log('[VK Teams AI] AI Manager initialized');
-        } else {
-            console.warn('[VK Teams AI] AI Provider module not loaded');
         }
 
-        if (!aimsid) {
-            console.warn('[VK Teams Custom Reactions] AIMSID not found — укажите во вкладке «Подключение»');
-        }
-
-        // Add styles
         const style = document.createElement('style');
         style.textContent = `
             @keyframes slideIn {
@@ -1415,13 +1302,11 @@
         `;
         document.head.appendChild(style);
 
-        // Process existing messages (retry — messenger iframe may mount after shell)
         processMessages();
         [1500, 4000, 8000].forEach((delay) => {
             setTimeout(processMessages, delay);
         });
 
-        // Watch for new messages
         const observer = new MutationObserver(() => {
             processMessages();
         });
@@ -1434,18 +1319,15 @@
             });
         }
 
-        console.log('[VK Teams Custom Reactions] Initialized successfully', 'frame:', window.location.href);
 
-        // Initialize Call Recording
+        setInterval(processMessages, 2500);
+
         initCallRecording();
     }
 
-    // Initialize Call Recording Manager
     async function initCallRecording() {
         try {
-            // Check if call recording modules are available
             if (!window.VKTeamsCallRecording || !window.VKTeamsCallRecording.CallRecordingManager) {
-                // Modules not loaded yet
                 return;
             }
 
@@ -1453,7 +1335,6 @@
             const manager = new CallRecordingManager();
             await manager.init();
 
-            // Store manager globally for access from other parts
             window.VKTeamsCallRecordingManagerInstance = manager;
 
             console.log('[VK Teams CallRecording] Initialized successfully');
@@ -1462,12 +1343,10 @@
         }
     }
 
-    // Handle messages from popup
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'reloadRecordingSettings') {
             console.log('[VK Teams CallRecording] Reloading settings...');
 
-            // Reinitialize with new settings
             if (window.VKTeamsCallRecordingManagerInstance) {
                 window.VKTeamsCallRecordingManagerInstance.loadSettings().then(settings => {
                     window.VKTeamsCallRecordingManagerInstance.isEnabled = settings.callRecordingEnabled;
@@ -1482,7 +1361,6 @@
             }
         }
 
-        // Handle getRecordings request from popup
         if (message.action === 'getRecordings') {
             console.log('[VK Teams CallRecording] Getting recordings...');
 
@@ -1514,7 +1392,6 @@
             return false;
         }
 
-        // Handle getRecordingBlob request from popup
         if (message.action === 'getRecordingBlob' && message.recordingId) {
             console.log('[VK Teams CallRecording] Getting recording blob:', message.recordingId);
 
@@ -1554,7 +1431,6 @@
             return false;
         }
 
-        // Handle getRecordingStats request from popup
         if (message.action === 'getRecordingStats') {
             console.log('[VK Teams CallRecording] Getting recording stats...');
 
@@ -1580,7 +1456,6 @@
             return false;
         }
 
-        // Handle deleteRecording request from popup
         if (message.action === 'deleteRecording' && message.recordingId) {
             console.log('[VK Teams CallRecording] Deleting recording:', message.recordingId);
 
@@ -1606,7 +1481,6 @@
             return false;
         }
 
-        // Handle transcribeRecording request from popup
         if (message.action === 'transcribeRecording' && message.recordingId) {
             console.log('[VK Teams CallRecording] Transcribing recording:', message.recordingId);
 
@@ -1641,7 +1515,6 @@
             return false;
         }
 
-        // Handle deleteAllRecordings request from popup
         if (message.action === 'deleteAllRecordings') {
             console.log('[VK Teams CallRecording] Deleting all recordings...');
 
@@ -1668,11 +1541,9 @@
         }
     });
 
-    // Wait for page load
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
-        // Give page time to render
         setTimeout(init, 2000);
     }
 })();

@@ -1,4 +1,3 @@
-// VK Teams Custom Reactions - Popup Settings
 (function() {
     'use strict';
 
@@ -8,7 +7,6 @@
 
     let reactionSetsCache = [];
     let activeReactionSetIdCache = null;
-    /** @type {null|string} null — редактор скрыт; 'new' — создание; иначе id набора */
     let editingSetId = null;
 
     function tabEffectiveUrl(tab) {
@@ -18,8 +16,6 @@
         const u = tab.url || tab.pendingUrl;
         return (typeof u === 'string' && u) ? u : '';
     }
-
-    /** URLs where the content script is injected (keep in sync with manifest.json matches). */
     function isMessengerTabUrl(url) {
         if (!url || typeof url !== 'string') {
             return false;
@@ -53,7 +49,6 @@
         }
     }
 
-    // Get all VK Teams / VK WorkSpace messenger tabs (scan all windows; merge pattern + URL filter).
     async function getAllTeamsTabs() {
         try {
             const byId = new Map();
@@ -142,8 +137,35 @@
             return null;
         }
     }
+    const BUILTIN_DEFAULT_CONNECTION = {
+        customAimsid: '',
+        rapiBaseUrl: 'https://u.myteam.vmailru.net',
+        rapiApiVersion: '145'
+    };
 
-    const PRESET_AIMSID_VALUE = '444.4444444444.4444444444:avln.ru';
+    let cachedFileDefaults = null;
+
+    async function loadDefaultsFromFile() {
+        if (cachedFileDefaults) {
+            return cachedFileDefaults;
+        }
+        try {
+            const url = chrome.runtime.getURL('connection.defaults.json');
+            const res = await fetch(url);
+            if (res.ok) {
+                cachedFileDefaults = await res.json();
+                return cachedFileDefaults;
+            }
+        } catch (e) {
+            console.warn('[VK Teams] connection.defaults.json:', e);
+        }
+        return null;
+    }
+
+    async function resolveConnectionDefaults() {
+        const fromFile = await loadDefaultsFromFile();
+        return Object.assign({}, BUILTIN_DEFAULT_CONNECTION, fromFile || {});
+    }
 
     function reactionsToInputString(reactions) {
         if (!Array.isArray(reactions) || !reactions.length) {
@@ -204,11 +226,23 @@
     }
 
     function persistReactionSets(sets, activeId, activeReactions, done) {
-        chrome.storage.sync.set({
+        const payload = {
             reactionSets: sets,
             activeReactionSetId: activeId,
             customReactions: activeReactions
-        }, done);
+        };
+        if (window.VKTeamsReactionStorage) {
+            window.VKTeamsReactionStorage.write(payload, done);
+            return;
+        }
+        chrome.storage.local.set(payload, () => {
+            if (chrome.runtime.lastError) {
+                console.error('[VK Teams Reactions Settings] save failed:', chrome.runtime.lastError.message);
+            }
+            if (typeof done === 'function') {
+                done();
+            }
+        });
     }
 
     function migrateReactionStorage(result) {
@@ -280,28 +314,44 @@
         });
     }
 
-    function loadReactionSets() {
-        chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (result) => {
-            const migrated = migrateReactionStorage(result);
-            reactionSetsCache = migrated.sets;
-            activeReactionSetIdCache = migrated.activeId;
+    function applyLoadedReactionSets(result) {
+        const migrated = migrateReactionStorage(result);
+        reactionSetsCache = migrated.sets;
+        activeReactionSetIdCache = migrated.activeId;
 
-            if (!reactionSetsCache.some((s) => s.id === activeReactionSetIdCache)) {
-                activeReactionSetIdCache = reactionSetsCache[0].id;
-            }
+        if (!reactionSetsCache.some((s) => s.id === activeReactionSetIdCache)) {
+            activeReactionSetIdCache = reactionSetsCache[0].id;
+        }
 
-            const persistMigrated = () => {
-                const active = getActiveReactionSet();
+        const finishUi = () => {
+            const active = getActiveReactionSet();
+            if (active) {
                 updatePreviewFromReactions(active.reactions, active.name);
-                renderReactionSetsList();
-            };
-
-            if (migrated.migrated) {
-                const active = getActiveReactionSet();
-                persistReactionSets(reactionSetsCache, activeReactionSetIdCache, active.reactions, persistMigrated);
-            } else {
-                persistMigrated();
             }
+            renderReactionSetsList();
+        };
+
+        if (migrated.migrated) {
+            const active = getActiveReactionSet();
+            persistReactionSets(reactionSetsCache, activeReactionSetIdCache, active.reactions, finishUi);
+        } else {
+            finishUi();
+        }
+    }
+
+    function loadReactionSets() {
+        if (window.VKTeamsReactionStorage) {
+            window.VKTeamsReactionStorage.read().then(applyLoadedReactionSets).catch(() => {
+                applyLoadedReactionSets({});
+            });
+            return;
+        }
+        chrome.storage.local.get(['reactionSets', 'activeReactionSetId', 'customReactions'], (local) => {
+            if (Array.isArray(local.reactionSets) && local.reactionSets.length) {
+                applyLoadedReactionSets(local);
+                return;
+            }
+            chrome.storage.sync.get(['reactionSets', 'activeReactionSetId', 'customReactions'], applyLoadedReactionSets);
         });
     }
 
@@ -444,10 +494,262 @@
             });
         });
     }
+    let sidebarLinksCache = [];
+    let editingSidebarLinkId = null;
 
-    // === AI Settings ===
+    function createSidebarLinkId() {
+        return 'link_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    }
 
-    // Load AI config
+    function normalizeSidebarUrl(raw) {
+        let value = (raw || '').trim();
+        if (!value) {
+            return null;
+        }
+        if (!/^https?:\/\//i.test(value)) {
+            value = 'https://' + value;
+        }
+        try {
+            const parsed = new URL(value);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return null;
+            }
+            return parsed.href;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function firstEmojiChar(text) {
+        const trimmed = (text || '').trim();
+        if (!trimmed) {
+            return '🔗';
+        }
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            const seg = new Intl.Segmenter('ru', { granularity: 'grapheme' });
+            const first = [...seg.segment(trimmed)][0];
+            return first ? first.segment : '🔗';
+        }
+        return trimmed.slice(0, 2) || '🔗';
+    }
+
+    function showSidebarLinksStatus(message, type) {
+        const el = document.getElementById('sidebarLinksStatusMessage');
+        if (!el) {
+            return;
+        }
+        el.textContent = message;
+        el.className = 'status-message ' + (type || '');
+        if (type === 'success') {
+            setTimeout(() => {
+                el.className = 'status-message';
+                el.textContent = '';
+            }, 3000);
+        }
+    }
+
+    async function persistSidebarLinks(links, done) {
+        try {
+            if (window.VKTeamsSidebarLinksStorage) {
+                sidebarLinksCache = await window.VKTeamsSidebarLinksStorage.write(links);
+            } else {
+                sidebarLinksCache = links;
+                await new Promise((resolve, reject) => {
+                    chrome.storage.local.set({ customSidebarLinks: links }, () => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                            return;
+                        }
+                        resolve();
+                    });
+                });
+            }
+            if (typeof done === 'function') {
+                done();
+            }
+        } catch (err) {
+            showSidebarLinksStatus('Ошибка сохранения: ' + err.message, 'error');
+        }
+    }
+
+    function renderSidebarLinksList() {
+        const list = document.getElementById('sidebarLinksList');
+        if (!list) {
+            return;
+        }
+        list.innerHTML = '';
+
+        if (!sidebarLinksCache.length) {
+            list.innerHTML = '<div class="hint" style="text-align:center;padding:8px 0">Пока нет кнопок</div>';
+            return;
+        }
+
+        sidebarLinksCache.forEach((link) => {
+            const card = document.createElement('div');
+            card.className = 'preset-card sidebar-link-card';
+            card.innerHTML = `
+                <div class="sidebar-link-head">
+                    <span class="sidebar-link-emoji">${escapeHtml(link.emoji)}</span>
+                    <span class="preset-name" style="margin:0">${escapeHtml(link.title)}</span>
+                </div>
+                <div class="sidebar-link-meta">${escapeHtml(link.url)}</div>
+                <div class="reaction-set-actions">
+                    <button type="button" class="set-action-btn" data-action="edit">Изменить</button>
+                    <button type="button" class="set-action-btn set-action-delete" data-action="delete">Удалить</button>
+                </div>
+            `;
+            card.querySelector('[data-action="edit"]').addEventListener('click', () => {
+                openSidebarLinkEditor(link.id);
+            });
+            card.querySelector('[data-action="delete"]').addEventListener('click', () => {
+                deleteSidebarLink(link.id);
+            });
+            list.appendChild(card);
+        });
+    }
+
+    async function loadSidebarLinks() {
+        try {
+            if (window.VKTeamsSidebarLinksStorage) {
+                sidebarLinksCache = await window.VKTeamsSidebarLinksStorage.read();
+            } else {
+                const result = await new Promise((resolve) => {
+                    chrome.storage.local.get(['customSidebarLinks'], resolve);
+                });
+                sidebarLinksCache = Array.isArray(result.customSidebarLinks) ? result.customSidebarLinks : [];
+            }
+        } catch (e) {
+            sidebarLinksCache = [];
+        }
+        renderSidebarLinksList();
+    }
+
+    function openSidebarLinkEditor(linkId) {
+        editingSidebarLinkId = linkId;
+        const editor = document.getElementById('sidebarLinkEditor');
+        const titleInput = document.getElementById('sidebarLinkTitleInput');
+        const urlInput = document.getElementById('sidebarLinkUrlInput');
+        const emojiInput = document.getElementById('sidebarLinkEmojiInput');
+        const newTabInput = document.getElementById('sidebarLinkNewTabInput');
+        const deleteBtn = document.getElementById('deleteSidebarLinkButton');
+
+        if (!editor || !titleInput || !urlInput) {
+            return;
+        }
+
+        if (linkId === 'new') {
+            titleInput.value = '';
+            urlInput.value = '';
+            if (emojiInput) {
+                emojiInput.value = '🔗';
+            }
+            if (newTabInput) {
+                newTabInput.checked = true;
+            }
+            if (deleteBtn) {
+                deleteBtn.style.display = 'none';
+            }
+        } else {
+            const link = sidebarLinksCache.find((l) => l.id === linkId);
+            if (!link) {
+                return;
+            }
+            titleInput.value = link.title;
+            urlInput.value = link.url;
+            if (emojiInput) {
+                emojiInput.value = link.emoji;
+            }
+            if (newTabInput) {
+                newTabInput.checked = link.openInNewTab !== false;
+            }
+            if (deleteBtn) {
+                deleteBtn.style.display = 'inline-block';
+            }
+        }
+
+        editor.style.display = 'block';
+        titleInput.focus();
+    }
+
+    function closeSidebarLinkEditor() {
+        editingSidebarLinkId = null;
+        const editor = document.getElementById('sidebarLinkEditor');
+        if (editor) {
+            editor.style.display = 'none';
+        }
+    }
+
+    function saveSidebarLinkFromEditor() {
+        const titleInput = document.getElementById('sidebarLinkTitleInput');
+        const urlInput = document.getElementById('sidebarLinkUrlInput');
+        const emojiInput = document.getElementById('sidebarLinkEmojiInput');
+        const newTabInput = document.getElementById('sidebarLinkNewTabInput');
+
+        const title = (titleInput ? titleInput.value : '').trim();
+        const url = normalizeSidebarUrl(urlInput ? urlInput.value : '');
+        const emoji = firstEmojiChar(emojiInput ? emojiInput.value : '🔗');
+        const openInNewTab = newTabInput ? newTabInput.checked : true;
+
+        if (!title) {
+            showSidebarLinksStatus('Укажите название', 'error');
+            return;
+        }
+        if (!url) {
+            showSidebarLinksStatus('Некорректный URL (нужен http или https)', 'error');
+            return;
+        }
+
+        const maxLinks = (window.VKTeamsSidebarLinksStorage && window.VKTeamsSidebarLinksStorage.MAX_LINKS) || 15;
+
+        if (editingSidebarLinkId === 'new') {
+            if (sidebarLinksCache.length >= maxLinks) {
+                showSidebarLinksStatus('Максимум ' + maxLinks + ' кнопок', 'error');
+                return;
+            }
+            sidebarLinksCache.push({
+                id: createSidebarLinkId(),
+                title: title,
+                url: url,
+                emoji: emoji,
+                openInNewTab: openInNewTab
+            });
+        } else {
+            const idx = sidebarLinksCache.findIndex((l) => l.id === editingSidebarLinkId);
+            if (idx === -1) {
+                return;
+            }
+            sidebarLinksCache[idx] = Object.assign({}, sidebarLinksCache[idx], {
+                title: title,
+                url: url,
+                emoji: emoji,
+                openInNewTab: openInNewTab
+            });
+        }
+
+        persistSidebarLinks(sidebarLinksCache, () => {
+            closeSidebarLinkEditor();
+            renderSidebarLinksList();
+            showSidebarLinksStatus('✅ Кнопка сохранена', 'success');
+        });
+    }
+
+    function deleteSidebarLink(linkId) {
+        const link = sidebarLinksCache.find((l) => l.id === linkId);
+        if (!link) {
+            return;
+        }
+        if (!confirm('Удалить кнопку «' + link.title + '»?')) {
+            return;
+        }
+        sidebarLinksCache = sidebarLinksCache.filter((l) => l.id !== linkId);
+        if (editingSidebarLinkId === linkId) {
+            closeSidebarLinkEditor();
+        }
+        persistSidebarLinks(sidebarLinksCache, () => {
+            renderSidebarLinksList();
+            showSidebarLinksStatus('Кнопка удалена', 'success');
+        });
+    }
     function loadAiConfig() {
         chrome.storage.sync.get(['aiConfig'], (result) => {
             if (result.aiConfig) {
@@ -476,7 +778,6 @@
         });
     }
 
-    // Update temperature label
     function updateTemperatureLabel() {
         const temperature = document.getElementById('aiTemperature').value;
         const label = document.querySelector('label[for="aiTemperature"]');
@@ -485,7 +786,6 @@
         }
     }
 
-    // Save AI config
     function saveAiConfig() {
         const provider = document.getElementById('aiProvider').value;
         const apiKey = document.getElementById('aiApiKey').value;
@@ -496,7 +796,6 @@
         const format = document.getElementById('aiFormat').value;
         const autoSend = document.getElementById('aiAutoSend').checked;
 
-        // Validation
         if (!provider) {
             showAiStatus('Выберите провайдер', 'error');
             return;
@@ -534,7 +833,6 @@
             console.log('[VK Teams AI Settings] Config saved:', config);
             showAiStatus('✅ Настройки сохранены!', 'success');
 
-            // Notify content script to reload AI
             getAllTeamsTabs().then(tabs => {
                 tabs.forEach(tab => {
                     chrome.tabs.sendMessage(tab.id, {
@@ -547,7 +845,6 @@
         });
     }
 
-    // Show AI status message
     function showAiStatus(message, type) {
         const statusDiv = document.getElementById('aiStatusMessage');
         statusDiv.textContent = message;
@@ -574,29 +871,102 @@
         }
     }
 
-    function loadConnectionSettings() {
-        chrome.storage.sync.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], (r) => {
-            const aimsidEl = document.getElementById('customAimsid');
-            const urlEl = document.getElementById('rapiBaseUrl');
-            const verEl = document.getElementById('rapiApiVersion');
-            if (aimsidEl) {
-                aimsidEl.value = (r.customAimsid && r.customAimsid.trim()) ? r.customAimsid.trim() : '';
+    function autoDetectAimsidIfEmpty() {
+        const aimsidEl = document.getElementById('customAimsid');
+        if (!aimsidEl || aimsidEl.value.trim()) {
+            return;
+        }
+        getAllTeamsTabs().then((tabs) => {
+            if (!tabs.length) {
+                return;
             }
-            if (urlEl) {
-                urlEl.value = (r.rapiBaseUrl && r.rapiBaseUrl.trim()) ? r.rapiBaseUrl.trim() : '';
-            }
-            if (verEl) {
-                verEl.value = (r.rapiApiVersion != null && String(r.rapiApiVersion).trim()) ? String(r.rapiApiVersion).trim() : '';
-            }
+            tabs.forEach((tab) => {
+                chrome.tabs.sendMessage(tab.id, { action: 'getDetectedAimsid' }, (resp) => {
+                    if (chrome.runtime.lastError || !resp || !resp.aimsid) {
+                        return;
+                    }
+                    if (aimsidEl && !aimsidEl.value.trim()) {
+                        aimsidEl.value = resp.aimsid;
+                    }
+                });
+            });
         });
+    }
+
+    async function readStoredConnectionSettings() {
+        if (window.VKTeamsConnectionStorage) {
+            return window.VKTeamsConnectionStorage.read();
+        }
+        return new Promise((resolve) => {
+            chrome.storage.local.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], (local) => {
+                const hasLocal =
+                    (local.customAimsid && String(local.customAimsid).trim()) ||
+                    (local.rapiBaseUrl && String(local.rapiBaseUrl).trim());
+                if (hasLocal) {
+                    resolve(local);
+                    return;
+                }
+                chrome.storage.sync.get(['customAimsid', 'rapiBaseUrl', 'rapiApiVersion'], resolve);
+            });
+        });
+    }
+
+    async function loadConnectionSettings() {
+        const defaults = await resolveConnectionDefaults();
+        const r = await readStoredConnectionSettings();
+        const aimsidEl = document.getElementById('customAimsid');
+        const urlEl = document.getElementById('rapiBaseUrl');
+        const verEl = document.getElementById('rapiApiVersion');
+
+        const storedAimsid = (r.customAimsid && r.customAimsid.trim()) ? r.customAimsid.trim() : '';
+        const storedUrl = (r.rapiBaseUrl && r.rapiBaseUrl.trim()) ? r.rapiBaseUrl.trim() : '';
+        const storedVer = (r.rapiApiVersion != null && String(r.rapiApiVersion).trim())
+            ? String(r.rapiApiVersion).trim()
+            : '';
+
+        if (aimsidEl) {
+            aimsidEl.value = storedAimsid || (defaults.customAimsid || '').trim();
+        }
+        if (urlEl) {
+            urlEl.value = storedUrl || (defaults.rapiBaseUrl || '').trim();
+        }
+        if (verEl) {
+            verEl.value = storedVer || String(defaults.rapiApiVersion || '').trim();
+        }
+
+        if (!storedAimsid) {
+            autoDetectAimsidIfEmpty();
+        }
     }
 
     function detectAimsidFromTab() {
         const aimsidEl = document.getElementById('customAimsid');
-        if (aimsidEl) {
-            aimsidEl.value = PRESET_AIMSID_VALUE;
-        }
-        showConnectionStatus('✅ AIMSID вставлен — нажмите «Сохранить подключение»', 'success');
+        getAllTeamsTabs().then((tabs) => {
+            if (!tabs.length) {
+                showConnectionStatus('Откройте VK WorkSpace / Teams в браузере', 'error');
+                return;
+            }
+            let found = false;
+            tabs.forEach((tab) => {
+                chrome.tabs.sendMessage(tab.id, { action: 'getDetectedAimsid' }, (resp) => {
+                    if (chrome.runtime.lastError) {
+                        return;
+                    }
+                    if (resp && resp.aimsid) {
+                        found = true;
+                        if (aimsidEl) {
+                            aimsidEl.value = resp.aimsid;
+                        }
+                        showConnectionStatus('✅ AIMSID взят со страницы — нажмите «Сохранить»', 'success');
+                    }
+                });
+            });
+            setTimeout(() => {
+                if (!found && (!aimsidEl || !aimsidEl.value.trim())) {
+                    showConnectionStatus('AIMSID на странице не найден. Войдите в мессенджер и повторите.', 'error');
+                }
+            }, 900);
+        });
     }
 
     function saveConnectionSettings() {
@@ -609,9 +979,9 @@
             return;
         }
 
-        const aimsidPattern = /^\d{3}\.\d+\.\d+:[^\s]+$/;
+        const aimsidPattern = /^\d{3}\.\d+\.\d+:.+$/;
         if (!aimsidPattern.test(rawAimsid)) {
-            showConnectionStatus('Неверный формат AIMSID (ожидается 014.…:email)', 'error');
+            showConnectionStatus('Неверный формат AIMSID (ожидается 014.…:логин)', 'error');
             return;
         }
 
@@ -647,32 +1017,44 @@
             rapiApiVersion: rawVer
         };
 
-        chrome.storage.sync.set(payload, () => {
+        const afterSave = () => {
             showConnectionStatus('✅ Подключение сохранено', 'success');
             getAllTeamsTabs().then((tabs) => {
                 tabs.forEach((tab) => {
                     chrome.tabs.sendMessage(tab.id, { action: 'reloadConnection' }).catch(() => {});
+                    chrome.tabs.sendMessage(tab.id, { action: 'reloadRapiConfig' }).catch(() => {});
                 });
             });
+        };
+
+        const onError = (err) => {
+            showConnectionStatus('Ошибка сохранения: ' + (err && err.message ? err.message : String(err)), 'error');
+        };
+
+        if (window.VKTeamsConnectionStorage) {
+            window.VKTeamsConnectionStorage.write(payload).then(afterSave).catch(onError);
+            return;
+        }
+
+        chrome.storage.local.set(payload, () => {
+            if (chrome.runtime.lastError) {
+                onError(new Error(chrome.runtime.lastError.message));
+                return;
+            }
+            afterSave();
         });
     }
-
-    // === Tab switching ===
     function switchTab(tabName) {
-        // Update tab buttons
         document.querySelectorAll('.tab').forEach(tab => {
             tab.classList.remove('active');
         });
         document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
 
-        // Update tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.remove('active');
         });
         document.getElementById(`${tabName}-tab`).classList.add('active');
     }
-
-    // === Accordion functionality ===
     function toggleSection(sectionId) {
         const header = document.querySelector(`[data-section="${sectionId}"]`);
         const content = document.getElementById(sectionId);
@@ -682,36 +1064,27 @@
         const isCollapsed = content.classList.contains('collapsed');
 
         if (isCollapsed) {
-            // Expand
             content.classList.remove('collapsed');
             header.setAttribute('aria-expanded', 'true');
         } else {
-            // Collapse
             content.classList.add('collapsed');
             header.setAttribute('aria-expanded', 'false');
         }
     }
 
-    // Initialize accordion sections
     function initializeAccordion() {
         document.querySelectorAll('.section-header').forEach(header => {
             const sectionId = header.getAttribute('data-section');
             const content = document.getElementById(sectionId);
 
-            // Set initial aria-expanded based on collapsed class
             const isCollapsed = content && content.classList.contains('collapsed');
             header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
 
-            // Add click handler
             header.addEventListener('click', () => {
                 toggleSection(sectionId);
             });
         });
     }
-
-    // === Activation System ===
-
-    // Check if extension is activated
     function checkActivation() {
         chrome.storage.sync.get(['extensionActivated'], (result) => {
             const isActivated = result.extensionActivated || false;
@@ -749,13 +1122,10 @@
         });
     }
 
-    // Activate extension
     function activateExtension() {
         chrome.storage.sync.set({ extensionActivated: true }, () => {
-            console.log('[VK Teams Extension] Extension activated!');
             checkActivation();
 
-            // Notify content script
             getAllTeamsTabs().then(tabs => {
                 tabs.forEach(tab => {
                     chrome.tabs.sendMessage(tab.id, {
@@ -768,20 +1138,41 @@
         });
     }
 
-    // Initialize
     document.addEventListener('DOMContentLoaded', () => {
-        console.log('[VK Teams Reactions Settings] Popup loaded');
+        if (/[?&]embed=1(?:&|$)/.test(location.search)) {
+            document.body.classList.add('vkteams-embed-panel');
+        }
 
-        // Check activation status first
         checkActivation();
 
-        // Activation button handler
         const activateButton = document.getElementById('activateButton');
         if (activateButton) {
             activateButton.addEventListener('click', activateExtension);
         }
 
         loadReactionSets();
+        loadSidebarLinks();
+
+        const addSidebarLinkBtn = document.getElementById('addSidebarLinkButton');
+        if (addSidebarLinkBtn) {
+            addSidebarLinkBtn.addEventListener('click', () => openSidebarLinkEditor('new'));
+        }
+        const saveSidebarLinkBtn = document.getElementById('saveSidebarLinkButton');
+        if (saveSidebarLinkBtn) {
+            saveSidebarLinkBtn.addEventListener('click', saveSidebarLinkFromEditor);
+        }
+        const cancelSidebarLinkBtn = document.getElementById('cancelSidebarLinkButton');
+        if (cancelSidebarLinkBtn) {
+            cancelSidebarLinkBtn.addEventListener('click', closeSidebarLinkEditor);
+        }
+        const deleteSidebarLinkBtn = document.getElementById('deleteSidebarLinkButton');
+        if (deleteSidebarLinkBtn) {
+            deleteSidebarLinkBtn.addEventListener('click', () => {
+                if (editingSidebarLinkId && editingSidebarLinkId !== 'new') {
+                    deleteSidebarLink(editingSidebarLinkId);
+                }
+            });
+        }
 
         const addSetBtn = document.getElementById('addReactionSetButton');
         if (addSetBtn) {
@@ -804,10 +1195,8 @@
             });
         }
 
-        // Initialize accordion functionality
         initializeAccordion();
 
-        // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 const tabName = tab.getAttribute('data-tab');
@@ -827,7 +1216,6 @@
 
         loadConnectionSettings();
 
-        // AI provider change handler
         document.getElementById('aiProvider').addEventListener('change', (e) => {
             const customGroup = document.getElementById('customEndpointGroup');
             const formatGroup = document.getElementById('customFormatGroup');
@@ -839,7 +1227,6 @@
                 formatGroup.style.display = 'none';
             }
 
-            // Set default models and settings
             const modelInput = document.getElementById('aiModel');
             const endpointInput = document.getElementById('aiEndpoint');
             const formatInput = document.getElementById('aiFormat');
@@ -891,7 +1278,6 @@
                     maxTokensInput.value = config.maxTokens;
                 }
 
-                // Set custom provider specific settings
                 if (e.target.value === 'custom') {
                     if (config.endpoint) {
                         endpointInput.value = config.endpoint;
@@ -906,10 +1292,8 @@
             }
         });
 
-        // Temperature slider
         document.getElementById('aiTemperature').addEventListener('input', updateTemperatureLabel);
 
-        // Save AI config button
         document.getElementById('saveAiButton').addEventListener('click', saveAiConfig);
 
         const saveConnectionBtn = document.getElementById('saveConnectionButton');
@@ -920,10 +1304,6 @@
         if (detectAimsidBtn) {
             detectAimsidBtn.addEventListener('click', detectAimsidFromTab);
         }
-
-        // === Recordings Tab ===
-
-        // Load recording settings
         function loadRecordingSettings() {
             chrome.storage.sync.get(['callRecordingEnabled', 'autoAnswerCalls', 'autoTranscribe', 'useLLMForSpeakers'], (result) => {
                 document.getElementById('enableCallRecording').checked = result.callRecordingEnabled || false;
@@ -933,7 +1313,6 @@
             });
         }
 
-        // Save recording settings
         function saveRecordingSettings() {
             const enabled = document.getElementById('enableCallRecording').checked;
             const autoAnswer = document.getElementById('autoAnswerCalls').checked;
@@ -948,7 +1327,6 @@
             }, () => {
                 console.log('[VK Teams Recordings] Settings saved');
 
-                // Notify content script
                 getAllTeamsTabs().then(tabs => {
                     tabs.forEach(tab => {
                         chrome.tabs.sendMessage(tab.id, {
@@ -961,7 +1339,6 @@
             });
         }
 
-        // Send message to content script
         async function sendToContentScript(message) {
             const tab = await getActiveTeamsTab();
             if (!tab) {
@@ -981,7 +1358,6 @@
             });
         }
 
-        // Format duration (ms to mm:ss)
         function formatDuration(ms) {
             const seconds = Math.floor(ms / 1000);
             const minutes = Math.floor(seconds / 60);
@@ -989,14 +1365,12 @@
             return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
         }
 
-        // Format size (bytes to KB/MB)
         function formatSize(bytes) {
             if (bytes < 1024) return `${bytes} B`;
             if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
             return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
         }
 
-        // Format date (relative for UI)
         function formatDate(dateString) {
             const date = new Date(dateString);
             const now = new Date();
@@ -1020,7 +1394,6 @@
             });
         }
 
-        // Format absolute date and time (for file export)
         function formatAbsoluteDateTime(dateString) {
             const date = new Date(dateString);
             return date.toLocaleString('ru-RU', {
@@ -1033,7 +1406,6 @@
             });
         }
 
-        // Load recording blob
         async function loadRecordingBlob(recordingId) {
             try {
                 const response = await sendToContentScript({
@@ -1050,16 +1422,13 @@
             return null;
         }
 
-        // Create recording card HTML
         function createRecordingCard(recording) {
             const card = document.createElement('div');
             card.className = 'recording-card';
             card.dataset.recordingId = recording.id;
 
-            // Build transcription HTML
             let transcriptionHtml = '';
             if (recording.transcription) {
-                // Use formatted transcription if available, otherwise raw
                 const transcriptionContent = recording.transcriptionFormatted
                     ? formatDialogTranscription(recording.transcriptionFormatted)
                     : `<div class="transcription-text">${escapeHtml(recording.transcription)}</div>`;
@@ -1089,7 +1458,6 @@
                     </div>
                 `;
             } else {
-                // No transcription yet
                 transcriptionHtml = `
                     <button class="transcription-trigger" data-recording-id="${recording.id}">
                         🎤 Транскрибировать запись
@@ -1097,7 +1465,6 @@
                 `;
             }
 
-            // Format recording title: use date/time as primary identifier
             const recordingDate = new Date(recording.date);
             const dateStr = recordingDate.toLocaleDateString('ru-RU', {
                 day: '2-digit',
@@ -1110,7 +1477,6 @@
             });
             const primaryTitle = `Звонок от ${dateStr} в ${timeStr}`;
 
-            // Show participant name as secondary info only if it's valid (not Unknown, not email)
             const isValidName = recording.callerName &&
                                 recording.callerName !== 'Unknown' &&
                                 recording.callerName !== 'Unknown Caller' &&
@@ -1146,12 +1512,10 @@
                 ${transcriptionHtml}
             `;
 
-            // Add event listeners for buttons
             const downloadBtn = card.querySelector('.download');
             const deleteBtn = card.querySelector('.delete');
             const audioElement = card.querySelector('audio');
 
-            // Load blob immediately for playback
             (async () => {
                 const blobUrl = await loadRecordingBlob(recording.id);
                 if (blobUrl && audioElement) {
@@ -1166,7 +1530,6 @@
                 deleteBtn.addEventListener('click', () => deleteRecording(recording.id));
             }
 
-            // Add transcription toggle listener
             const transcriptionHeader = card.querySelector('.transcription-header');
             if (transcriptionHeader) {
                 transcriptionHeader.addEventListener('click', () => {
@@ -1177,7 +1540,6 @@
                 });
             }
 
-            // Add download transcription listener
             const downloadTranscriptionBtn = card.querySelector('.transcription-download');
             if (downloadTranscriptionBtn) {
                 downloadTranscriptionBtn.addEventListener('click', (e) => {
@@ -1186,7 +1548,6 @@
                 });
             }
 
-            // Add manual transcription trigger listener
             const transcriptionTrigger = card.querySelector('.transcription-trigger');
             if (transcriptionTrigger) {
                 transcriptionTrigger.addEventListener('click', () => {
@@ -1197,20 +1558,17 @@
             return card;
         }
 
-        // Format transcription as dialog
         function formatDialogTranscription(formattedText) {
             const lines = formattedText.split('\n').filter(line => line.trim());
             let dialogHtml = '<div class="transcription-dialog">';
 
             for (const line of lines) {
-                // Match "Участник N:" or "Speaker N:" or similar patterns
                 const match = line.match(/^(Участник\s*\d+|Speaker\s*\d+|Звонящий|Собеседник|Клиент|Оператор):\s*(.+)$/i);
 
                 if (match) {
                     const speaker = match[1].trim();
                     const text = match[2].trim();
 
-                    // Extract speaker number
                     let speakerNumber = 1;
                     const numberMatch = speaker.match(/\d+/);
                     if (numberMatch) {
@@ -1219,7 +1577,6 @@
                         speakerNumber = 2;
                     }
 
-                    // Limit to max 6 speaker classes (fallback to speaker6 for 7+)
                     const speakerClass = `speaker${Math.min(speakerNumber, 6)}`;
 
                     dialogHtml += `
@@ -1235,7 +1592,6 @@
             return dialogHtml;
         }
 
-        // Download transcription as text file
         function downloadTranscriptionAsText(recording) {
             const date = new Date(recording.date);
             const dateStr = date.toISOString().split('T')[0];
@@ -1243,7 +1599,6 @@
             const callerName = (recording.callerName || 'Unknown').replace(/[^a-zA-Z0-9а-яА-Я]/g, '_');
             const filename = `${callerName}_${dateStr}_${timeStr}_transcription.txt`;
 
-            // Create text content with both versions
             let textContent = `VK Teams - Расшифровка разговора\n`;
             textContent += `Дата: ${formatAbsoluteDateTime(recording.date)}\n`;
             textContent += `Длительность: ${formatDuration(recording.duration)}\n`;
@@ -1260,7 +1615,6 @@
             textContent += 'СЫРАЯ ТРАНСКРИПЦИЯ:\n\n';
             textContent += recording.transcription;
 
-            // Create download
             const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -1272,32 +1626,27 @@
             URL.revokeObjectURL(url);
         }
 
-        // Escape HTML to prevent XSS
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
         }
 
-        // Trigger manual transcription
         async function triggerManualTranscription(recordingId) {
             try {
                 console.log('[VK Teams Recordings] Triggering manual transcription for:', recordingId);
 
-                // Update button state
                 const button = document.querySelector(`.transcription-trigger[data-recording-id="${recordingId}"]`);
                 if (button) {
                     button.disabled = true;
                     button.textContent = '⏳ Транскрибируем...';
                 }
 
-                // Get tabs with content script
                 const tabs = await getAllTeamsTabs();
                 if (tabs.length === 0) {
                     throw new Error('VK Teams tab not found');
                 }
 
-                // Send transcription request
                 const response = await new Promise((resolve, reject) => {
                     chrome.tabs.sendMessage(tabs[0].id, {
                         action: 'transcribeRecording',
@@ -1317,14 +1666,12 @@
 
                 console.log('[VK Teams Recordings] Transcription completed:', response);
 
-                // Reload recordings to show updated transcription
                 await loadRecordings();
 
             } catch (error) {
                 console.error('[VK Teams Recordings] Manual transcription failed:', error);
                 alert(`Ошибка транскрипции: ${error.message}`);
 
-                // Reset button state
                 const button = document.querySelector(`.transcription-trigger[data-recording-id="${recordingId}"]`);
                 if (button) {
                     button.disabled = false;
@@ -1333,10 +1680,8 @@
             }
         }
 
-        // Download recording
         async function downloadRecording(recording) {
             try {
-                // Load blob data
                 const blobUrl = await loadRecordingBlob(recording.id);
                 if (!blobUrl) {
                     alert('Failed to load recording');
@@ -1346,7 +1691,6 @@
                 const a = document.createElement('a');
                 a.href = blobUrl;
 
-                // Create filename: CallerName_YYYY-MM-DD_HH-MM.webm
                 const date = new Date(recording.date);
                 const dateStr = date.toISOString().slice(0, 16).replace('T', '_').replace(/:/g, '-');
                 const callerName = (recording.callerName || 'Unknown').replace(/[^a-zA-Z0-9]/g, '_');
@@ -1364,7 +1708,6 @@
             }
         }
 
-        // Delete recording
         async function deleteRecording(id) {
             if (!confirm('Delete this recording? This cannot be undone.')) {
                 return;
@@ -1378,7 +1721,6 @@
 
                 console.log('[VK Teams Recordings] Deleted recording:', id);
 
-                // Reload recordings
                 await loadRecordings();
             } catch (error) {
                 console.error('[VK Teams Recordings] Failed to delete recording:', error);
@@ -1386,7 +1728,6 @@
             }
         }
 
-        // Delete all recordings
         async function deleteAllRecordings() {
             if (!confirm('Delete ALL recordings? This cannot be undone.')) {
                 return;
@@ -1399,7 +1740,6 @@
 
                 console.log('[VK Teams Recordings] Deleted all recordings');
 
-                // Reload recordings
                 await loadRecordings();
             } catch (error) {
                 console.error('[VK Teams Recordings] Failed to delete all recordings:', error);
@@ -1407,7 +1747,6 @@
             }
         }
 
-        // Load and display recordings
         async function loadRecordings() {
             console.log('[VK Teams Recordings] Loading recordings...');
 
@@ -1416,14 +1755,12 @@
             const recordingsStats = document.getElementById('recordingsStats');
             const deleteAllButton = document.getElementById('deleteAllButton');
 
-            // Ensure recordingsList exists
             if (!recordingsList) {
                 console.error('[VK Teams Recordings] recordingsList element not found in DOM');
                 return;
             }
 
             try {
-                // Get recordings and stats from content script
                 const [recordingsResponse, statsResponse] = await Promise.all([
                     sendToContentScript({ action: 'getRecordings' }),
                     sendToContentScript({ action: 'getRecordingStats' })
@@ -1435,21 +1772,17 @@
                 console.log('[VK Teams Recordings] Loaded:', recordings.length, 'recordings');
                 console.log('[VK Teams Recordings] Stats:', stats);
 
-                // Clear existing recordings
                 recordingsList.innerHTML = '';
 
                 if (recordings.length === 0) {
-                    // Show empty state
                     if (recordingsEmpty) recordingsList.appendChild(recordingsEmpty);
                     if (recordingsStats) recordingsStats.style.display = 'none';
                     if (deleteAllButton) deleteAllButton.style.display = 'none';
                 } else {
-                    // Hide empty state
                     if (recordingsEmpty) recordingsEmpty.style.display = 'none';
                     if (recordingsStats) recordingsStats.style.display = 'block';
                     if (deleteAllButton) deleteAllButton.style.display = 'block';
 
-                    // Update stats
                     const statsCount = document.getElementById('statsCount');
                     const statsSize = document.getElementById('statsSize');
                     const statsDuration = document.getElementById('statsDuration');
@@ -1458,7 +1791,6 @@
                     if (statsSize) statsSize.textContent = formatSize(stats.totalSize);
                     if (statsDuration) statsDuration.textContent = formatDuration(stats.totalDuration);
 
-                    // Create and append recording cards
                     recordings.forEach(recording => {
                         const card = createRecordingCard(recording);
                         recordingsList.appendChild(card);
@@ -1467,13 +1799,11 @@
             } catch (error) {
                 console.error('[VK Teams Recordings] Failed to load recordings:', error);
 
-                // Ensure recordingsList exists
                 if (!recordingsList) {
                     console.error('[VK Teams Recordings] recordingsList element not found');
                     return;
                 }
 
-                // Previously this matched any message containing substring "tab" (e.g. "establish") or "not" — wrong UI.
                 const msg = (error && error.message) ? String(error.message) : '';
                 const isNoMessengerTab = /VK Teams tab not found|Please open VK Teams/i.test(msg);
                 const isContentScriptMissing = /Could not establish connection|Receiving end does not exist|message port closed/i.test(msg);
@@ -1487,10 +1817,7 @@
                                 Откройте VK WorkSpace или корп. Teams <strong>в обычной вкладке</strong> этого браузера (не отдельное PWA‑окно, если возможно).
                             </div>
                             <div class="state-panel-tips">
-                                <div style="font-weight: 600; margin-bottom: 6px;">Что сделать:</div>
-                                <div>1. Вкладка с <strong>app.workspace.vk.ru</strong> (или webim.teams.…) в Chrome/Edge</div>
-                                <div>2. Обновите страницу (F5), затем снова откройте этот попап</div>
-                                <div>3. На <code>chrome://extensions</code> нажмите «Обновить» у расширения после правок в папке</div>
+                                Откройте мессенджер в этой вкладке браузера и обновите страницу (F5).
                             </div>
                         </div>
                     `;
@@ -1503,9 +1830,7 @@
                                 Часто это не PWA, а то что контент‑скрипт не внедрён: страница открыта до установки расширения, не пройдена активация или нужен перезапуск вкладки.
                             </div>
                             <div class="state-panel-tips">
-                                <div>• Обновите вкладку <strong>app.workspace.vk.ru</strong> (Ctrl+F5)</div>
-                                <div>• В попапе расширения пройдите <strong>активацию</strong> (если показывается первый экран)</div>
-                                <div>• В консоли страницы (F12) ищите лог: <code>[VK Teams Custom Reactions] Extension loaded!</code></div>
+                                Обновите вкладку мессенджера (Ctrl+F5) и активируйте расширение в попапе.
                             </div>
                             <div class="state-panel-error-msg">${escapeHtml(msg)}</div>
                         </div>
@@ -1522,16 +1847,13 @@
             }
         }
 
-        // Recording settings change handlers
         document.getElementById('enableCallRecording').addEventListener('change', saveRecordingSettings);
         document.getElementById('autoAnswerCalls').addEventListener('change', saveRecordingSettings);
         document.getElementById('autoTranscribe').addEventListener('change', saveRecordingSettings);
         document.getElementById('useLLMForSpeakers').addEventListener('change', saveRecordingSettings);
 
-        // Delete all button
         document.getElementById('deleteAllButton').addEventListener('click', deleteAllRecordings);
 
-        // Load recording settings on startup
         loadRecordingSettings();
     });
 })();

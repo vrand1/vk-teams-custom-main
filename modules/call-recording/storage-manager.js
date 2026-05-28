@@ -1,5 +1,3 @@
-// VK Teams Call Recording - Storage Manager
-// Manages storage of call recordings in IndexedDB
 
 (function() {
     'use strict';
@@ -18,7 +16,6 @@
             console.log('[VK Teams StorageManager] Initialized with options:', this.options);
         }
 
-        // Initialize IndexedDB
         async init() {
             return new Promise((resolve, reject) => {
                 const request = indexedDB.open(this.options.dbName, this.options.dbVersion);
@@ -32,7 +29,6 @@
                     this.db = request.result;
                     console.log('[VK Teams StorageManager] Database opened successfully');
 
-                    // Run auto-cleanup on init
                     this.cleanupOldRecordings().catch(error => {
                         console.error('[VK Teams StorageManager] Auto-cleanup failed:', error);
                     });
@@ -44,14 +40,12 @@
                     console.log('[VK Teams StorageManager] Upgrading database...');
                     const db = event.target.result;
 
-                    // Create object store if it doesn't exist
                     if (!db.objectStoreNames.contains(this.options.storeName)) {
                         const objectStore = db.createObjectStore(this.options.storeName, {
                             keyPath: 'id',
                             autoIncrement: true
                         });
 
-                        // Create indexes
                         objectStore.createIndex('timestamp', 'timestamp', { unique: false });
                         objectStore.createIndex('date', 'date', { unique: false });
                         objectStore.createIndex('callerName', 'callerName', { unique: false });
@@ -62,28 +56,24 @@
             });
         }
 
-        // Save recording to IndexedDB
         async saveRecording(recordingData, callInfo) {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
             }
 
             const recording = {
-                // Recording data
                 blob: recordingData.blob,
                 mimeType: recordingData.mimeType,
                 size: recordingData.size,
                 duration: recordingData.duration,
                 chunks: recordingData.chunks,
 
-                // Call metadata
                 callerName: callInfo?.callerName || 'Unknown',
                 timestamp: Date.now(),
                 date: new Date().toISOString(),
                 startTime: recordingData.startTime,
                 endTime: recordingData.endTime,
 
-                // Additional metadata
                 transcription: null, // Will be filled by AI later
                 summary: null, // Will be filled by AI later
                 processed: false
@@ -110,7 +100,6 @@
             });
         }
 
-        // Get all recordings
         async getRecordings(options = {}) {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -154,7 +143,6 @@
             });
         }
 
-        // Get single recording by ID
         async getRecording(id) {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -177,7 +165,6 @@
             });
         }
 
-        // Update recording (e.g., add transcription/summary)
         async updateRecording(id, updates) {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -185,7 +172,6 @@
 
             return new Promise(async (resolve, reject) => {
                 try {
-                    // First get the existing recording
                     const recording = await this.getRecording(id);
 
                     if (!recording) {
@@ -203,13 +189,11 @@
                         timestamp: new Date().toISOString()
                     });
 
-                    // Merge updates
                     const updatedRecording = {
                         ...recording,
                         ...updates
                     };
 
-                    // Save back to DB
                     const transaction = this.db.transaction([this.options.storeName], 'readwrite');
                     const objectStore = transaction.objectStore(this.options.storeName);
                     const request = objectStore.put(updatedRecording);
@@ -234,7 +218,6 @@
             });
         }
 
-        // Delete recording by ID
         async deleteRecording(id) {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -257,7 +240,6 @@
             });
         }
 
-        // Delete all recordings
         async deleteAllRecordings() {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -280,7 +262,6 @@
             });
         }
 
-        // Cleanup old recordings
         async cleanupOldRecordings() {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -317,7 +298,6 @@
             });
         }
 
-        // Get storage statistics
         async getStats() {
             if (!this.db) {
                 throw new Error('Database not initialized. Call init() first.');
@@ -358,7 +338,6 @@
             });
         }
 
-        // Close database connection
         close() {
             if (this.db) {
                 this.db.close();
@@ -368,7 +347,6 @@
         }
     }
 
-    // Export to global scope
     window.VKTeamsCallRecording = window.VKTeamsCallRecording || {};
     window.VKTeamsCallRecording.StorageManager = StorageManager;
 

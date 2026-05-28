@@ -55,6 +55,10 @@
       "all_frames": true,
       "match_about_blank": true,
       "js": [
+        "modules/reaction-storage.js",
+        "modules/connection-storage.js",
+        "modules/sidebar-links-storage.js",
+        "modules/sidebar-settings.js",
         "ai-provider.js",
         "modules/call-recording/audio-mixer.js",
         "modules/call-recording/call-detector.js",
@@ -70,5 +74,29 @@
   "icons": {
     "48": "icon48.png",
     "128": "icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup.html",
+        "popup.js",
+        "connection.defaults.json",
+        "connection.defaults.example.json",
+        "icon48.png",
+        "icon128.png",
+        "icons/sidebar-reactions.svg",
+        "ai-provider.js"
+      ],
+      "matches": [
+        "https://app.workspace.vk.ru/*",
+        "https://workspace.vk.ru/*",
+        "https://*.workspace.vk.ru/*",
+        "https://teams.your-organization.com/*",
+        "https://*.teams.your-organization.com/*",
+        "https://myteam.mail.ru/*",
+        "https://*.myteam.mail.ru/*",
+        "https://*.bizml.ru/*"
+      ]
+    }
+  ]
 }

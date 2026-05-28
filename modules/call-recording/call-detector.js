@@ -1,5 +1,3 @@
-// VK Teams Call Recording - Call Detector
-// Detects incoming and active calls, provides auto-answer functionality
 
 (function() {
     'use strict';
@@ -28,11 +26,9 @@
             console.log('[VK Teams CallDetector] Initialized with options:', this.options);
         }
 
-        // Start monitoring for calls
         start() {
             console.log('[VK Teams CallDetector] Starting call detection...');
 
-            // Monitor DOM changes for incoming call dialog
             this.observer = new MutationObserver(() => {
                 this.checkForIncomingCall();
             });
@@ -42,19 +38,16 @@
                 subtree: true
             });
 
-            // Periodic check for active calls
             this.checkIntervalId = setInterval(() => {
                 this.checkForActiveCall();
             }, this.options.checkInterval);
 
-            // Initial checks
             this.checkForIncomingCall();
             this.checkForActiveCall();
 
             console.log('[VK Teams CallDetector] Call detection started');
         }
 
-        // Stop monitoring
         stop() {
             console.log('[VK Teams CallDetector] Stopping call detection...');
 
@@ -68,18 +61,15 @@
                 this.checkIntervalId = null;
             }
 
-            // Release local microphone if captured
             this.releaseLocalMicrophone();
 
             console.log('[VK Teams CallDetector] Call detection stopped');
         }
 
-        // Check for incoming call dialog
         checkForIncomingCall() {
             const incomingDialog = document.querySelector('.im-box-incomingcall');
 
             if (incomingDialog && !this.incomingCall) {
-                // New incoming call detected - try multiple selectors
                 let callerName = null;
                 const nameSelectors = [
                     '.im-box-incoming__title',
@@ -100,7 +90,6 @@
                     }
                 }
 
-                // Fallback: try any heading or title element
                 if (!callerName) {
                     const headings = incomingDialog.querySelectorAll('h1, h2, h3, h4, [class*="title"], [class*="name"]');
                     for (const heading of headings) {
@@ -125,16 +114,13 @@
                     answered: false
                 };
 
-                // Find buttons - try multiple selectors
                 let audioButton = incomingDialog.querySelector('.im-voip-button_answer');
                 let declineButton = incomingDialog.querySelector('.im-voip-button_hangup');
 
-                // If not found, try alternative selectors
                 if (!audioButton) {
                     audioButton = incomingDialog.querySelector('button[aria-label*="Ответить"]') ||
                                   incomingDialog.querySelector('button[aria-label*="Answer"]');
 
-                    // Try finding by text content if still not found
                     if (!audioButton) {
                         const buttons = incomingDialog.querySelectorAll('button');
                         for (const btn of buttons) {
@@ -155,7 +141,6 @@
                     declineButton = incomingDialog.querySelector('button[aria-label*="Отклонить"]') ||
                                     incomingDialog.querySelector('button[aria-label*="Decline"]');
 
-                    // Try finding by text content if still not found
                     if (!declineButton) {
                         const buttons = incomingDialog.querySelectorAll('button');
                         for (const btn of buttons) {
@@ -188,7 +173,6 @@
 
                 this.emit('incomingCall', this.incomingCall);
 
-                // Auto-answer if enabled
                 if (this.options.autoAnswer) {
                     console.log('[VK Teams CallDetector] Auto-answering call in 500ms...');
                     setTimeout(() => {
@@ -200,13 +184,11 @@
                     console.log('[VK Teams CallDetector] Auto-answer is disabled');
                 }
             } else if (!incomingDialog && this.incomingCall) {
-                // Incoming call dialog disappeared
                 console.log('[VK Teams CallDetector] Incoming call dialog closed');
                 this.incomingCall = null;
             }
         }
 
-        // Capture local microphone
         async captureLocalMicrophone() {
             try {
                 console.log('[VK Teams CallDetector] Requesting local microphone access...');
@@ -237,7 +219,6 @@
             }
         }
 
-        // Release local microphone
         releaseLocalMicrophone() {
             if (this.localMicStream) {
                 console.log('[VK Teams CallDetector] Releasing local microphone...');
@@ -250,53 +231,43 @@
             }
         }
 
-        // Helper: Check if string is an email address
         isEmailAddress(text) {
             if (!text || typeof text !== 'string') return false;
-            // Simple email pattern matching
             const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             return emailPattern.test(text.trim());
         }
 
-        // Helper: Validate and clean name
         validateName(name) {
             if (!name || typeof name !== 'string') return null;
 
             const trimmed = name.trim();
 
-            // Filter out emails
             if (this.isEmailAddress(trimmed)) {
                 console.log('[VK Teams CallDetector] Rejected name (email):', trimmed);
                 return null;
             }
 
-            // Filter out too short names (likely UI labels)
             if (trimmed.length < 2) {
                 console.log('[VK Teams CallDetector] Rejected name (too short):', trimmed);
                 return null;
             }
 
-            // Filter out too long names (likely descriptions or errors)
             if (trimmed.length > 100) {
                 console.log('[VK Teams CallDetector] Rejected name (too long):', trimmed.substring(0, 50) + '...');
                 return null;
             }
 
-            // Filter out common UI labels
             const excludedTexts = ['звонок', 'call', 'вызов', 'групповой', 'group', 'unknown', 'неизвестно'];
             if (excludedTexts.some(excluded => trimmed.toLowerCase().includes(excluded))) {
                 console.log('[VK Teams CallDetector] Rejected name (UI label):', trimmed);
                 return null;
             }
 
-            // Valid name found
             console.log('[VK Teams CallDetector] Validated name:', trimmed);
             return trimmed;
         }
 
-        // Extract caller name from active call UI
         extractCallerNameFromUI() {
-            // Try multiple selectors to find the caller name in active call UI
             const selectors = [
                 '.im-voip-call-header__title',
                 '.im-voip-call-header__name',
@@ -319,7 +290,6 @@
                 }
             }
 
-            // Try to find from chat header or conversation
             const chatTitle = document.querySelector('.im-chat-header__title');
             if (chatTitle && chatTitle.textContent) {
                 const validatedName = this.validateName(chatTitle.textContent);
@@ -333,13 +303,10 @@
             return null;
         }
 
-        // Check for active call
         async checkForActiveCall() {
-            // Find ALL audio elements (including video elements with audio)
             const audioElements = Array.from(document.querySelectorAll('audio, video'));
             const activeStreams = [];
 
-            // Only log if there are elements OR if we have an active call (to see when it ends)
             const shouldLog = audioElements.length > 0 || this.currentCall !== null;
 
             if (shouldLog) {
@@ -348,7 +315,6 @@
                 console.log('[VK Teams CallDetector] ═══════════════════════════════════════════');
             }
 
-            // Log ALL elements first (only if should log)
             if (shouldLog) {
                 audioElements.forEach((element, index) => {
                     console.log(`[VK Teams CallDetector] 📺 Element #${index} (${element.tagName}):`, {
@@ -363,7 +329,6 @@
                 });
             }
 
-            // Now check each element for streams
             audioElements.forEach((element, index) => {
                 if (!element.srcObject) {
                     if (shouldLog) console.log(`[VK Teams CallDetector] ⊘ Element #${index}: No srcObject, skipping`);
@@ -383,7 +348,6 @@
                         elementMuted: element.muted
                     });
 
-                    // Log ALL audio tracks with detailed info
                     if (audioTracks.length > 0) {
                         console.log(`[VK Teams CallDetector]   📋 Audio tracks for stream ${stream.id}:`);
                         audioTracks.forEach((track, trackIndex) => {
@@ -402,21 +366,15 @@
                     }
                 }
 
-                // RELAXED FILTER: Check if stream is active OR has any audio tracks with readyState=live
-                // Don't check 'enabled' - it might be temporarily disabled
                 const usableAudioTracks = audioTracks.filter(track => track.readyState === 'live');
 
                 if (shouldLog) {
                     console.log(`[VK Teams CallDetector]   🔍 Filter result: ${usableAudioTracks.length} usable tracks (readyState=live)`);
                 }
 
-                // Accept stream if:
-                // 1. Stream is active, OR
-                // 2. Has at least one live audio track
                 const shouldInclude = stream.active || usableAudioTracks.length > 0;
 
                 if (shouldInclude) {
-                    // Check if we already have this stream (by ID)
                     const alreadyAdded = activeStreams.some(s => s.id === stream.id);
                     if (!alreadyAdded) {
                         activeStreams.push(stream);
@@ -444,14 +402,11 @@
                 console.log('[VK Teams CallDetector] ═══════════════════════════════════════════');
             }
 
-            // Check if we have active streams
             if (activeStreams.length > 0) {
                 if (!this.currentCall) {
-                    // New call started - capture local microphone
                     console.log('[VK Teams CallDetector] New call detected, capturing local microphone...');
                     const micCaptured = await this.captureLocalMicrophone();
 
-                    // Add local microphone to streams
                     if (micCaptured && this.localMicStream) {
                         activeStreams.push(this.localMicStream);
                         console.log('[VK Teams CallDetector] ✓ Added local microphone to streams');
@@ -466,16 +421,13 @@
                         audioElements: audioElements.filter(el => el.srcObject)
                     };
 
-                    // Try to get caller name from multiple sources
                     let callerName = null;
 
-                    // 1. Try from incoming call (if available)
                     if (this.incomingCall && this.incomingCall.callerName && this.incomingCall.callerName !== 'Unknown') {
                         callerName = this.incomingCall.callerName;
                         console.log('[VK Teams CallDetector] Using caller name from incoming call:', callerName);
                     }
 
-                    // 2. If not found or Unknown, try to extract from UI
                     if (!callerName || callerName === 'Unknown') {
                         const extractedName = this.extractCallerNameFromUI();
                         if (extractedName) {
@@ -484,7 +436,6 @@
                         }
                     }
 
-                    // 3. Final fallback
                     if (!callerName) {
                         callerName = 'Unknown';
                         console.log('[VK Teams CallDetector] Could not determine caller name, using "Unknown"');
@@ -495,18 +446,15 @@
                     console.log('[VK Teams CallDetector] ★★★ Active call started with', activeStreams.length, 'audio streams');
                     this.emit('callStarted', this.currentCall);
                 } else {
-                    // Update streams if they changed (but keep local mic)
                     const updatedStreams = [...activeStreams];
                     if (this.localMicStream) {
                         updatedStreams.push(this.localMicStream);
                     }
 
-                    // Check if streams actually changed (compare IDs)
                     const oldStreamIds = this.currentCall.streams.map(s => s.id).sort().join(',');
                     const newStreamIds = updatedStreams.map(s => s.id).sort().join(',');
                     const streamsChanged = oldStreamIds !== newStreamIds;
 
-                    // Only log if streams actually changed
                     if (streamsChanged) {
                         console.log('[VK Teams CallDetector] 🎤 Including local mic stream in update:', this.localMicStream?.id);
                         console.log('[VK Teams CallDetector] 🔍 Checking for stream changes...');
@@ -538,7 +486,6 @@
 
                         this.currentCall.streams = updatedStreams;
 
-                        // Emit event to notify manager about stream changes
                         console.log('[VK Teams CallDetector] 📢 Emitting streamsUpdated event with', updatedStreams.length, 'streams');
                         this.emit('streamsUpdated', {
                             ...this.currentCall,
@@ -548,13 +495,11 @@
                     }
                 }
             } else if (this.currentCall) {
-                // No more active streams - call ended
                 console.log('[VK Teams CallDetector] Call ended (no active audio streams)');
                 this.handleCallEnd();
             }
         }
 
-        // Handle call end
         handleCallEnd() {
             if (!this.currentCall) return;
 
@@ -568,13 +513,11 @@
             console.log(`[VK Teams CallDetector] Call duration: ${Math.round(callDuration / 1000)}s`);
             this.emit('callEnded', callInfo);
 
-            // Release local microphone
             this.releaseLocalMicrophone();
 
             this.currentCall = null;
         }
 
-        // Answer incoming call
         answerCall() {
             if (!this.incomingCall) {
                 console.warn('[VK Teams CallDetector] No incoming call to answer');
@@ -599,7 +542,6 @@
             return false;
         }
 
-        // Decline incoming call
         declineCall() {
             if (!this.incomingCall) {
                 console.warn('[VK Teams CallDetector] No incoming call to decline');
@@ -618,7 +560,6 @@
             return false;
         }
 
-        // Event system
         on(eventName, handler) {
             if (this.eventHandlers[eventName]) {
                 this.eventHandlers[eventName].push(handler);
@@ -655,7 +596,6 @@
             }
         }
 
-        // Getters
         isCallActive() {
             return this.currentCall !== null;
         }
@@ -673,7 +613,6 @@
         }
     }
 
-    // Export to global scope
     window.VKTeamsCallRecording = window.VKTeamsCallRecording || {};
     window.VKTeamsCallRecording.CallDetector = CallDetector;
 
