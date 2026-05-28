@@ -971,8 +971,8 @@
         <div class="form-group">
             <label class="form-label">AIMSID</label>
             <input type="text" class="form-input" id="customAimsid" placeholder="014.1234567890.1234567890:user@example.com" autocomplete="off" spellcheck="false">
-            <div class="hint">Токен сессии для <code>setReaction</code>. F12 → Application → Cookies → <code>aimsid</code>, или кнопка «Взять из вкладки» при открытом мессенджере.</div>
-            <button type="button" class="save-button btn-outline" id="detectAimsidButton" style="margin-top: 8px;">Взять из вкладки VK Teams</button>
+            <div class="hint">Токен сессии для <code>setReaction</code>. Можно вставить шаблон кнопкой ниже и затем сохранить подключение.</div>
+            <button type="button" class="save-button btn-outline" id="detectAimsidButton" style="margin-top: 8px;">Вставить из вкладки VK Teams</button>
         </div>
 
         <div class="form-group">
@@ -1156,8 +1156,8 @@
                     </div>
                     <div class="form-group" style="margin-bottom: 12px;">
                         <label class="form-label">Реакции</label>
-                        <textarea class="form-input" id="reactionSetReactionsInput" rows="2" placeholder="🤨 🙄 🥱 😭 🥶 🤮 🥺 💀 🦧 🔇" style="resize: vertical; font-size: 20px; line-height: 1.4;"></textarea>
-                        <div class="hint">Эмодзи через пробел, запятую или подряд. До 30 штук.</div>
+                        <textarea class="form-input" id="reactionSetReactionsInput" rows="2" placeholder="🤨, 🙄, 🥱, 😭, 🥶, 🤮, 🥺, 💀, 🦧, 🔇" style="resize: vertical; font-size: 20px; line-height: 1.4;"></textarea>
+                        <div class="hint">Разделяйте эмодзи только запятыми. До 30 штук.</div>
                     </div>
                     <div class="reaction-set-editor-actions">
                         <button type="button" class="save-button" id="saveReactionSetButton">Сохранить</button>

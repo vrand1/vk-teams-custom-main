@@ -138,11 +138,13 @@
         }
     }
 
+    const PRESET_AIMSID_VALUE = '444.4444444444.4444444444:avln.ru';
+
     function reactionsToInputString(reactions) {
         if (!Array.isArray(reactions) || !reactions.length) {
             return '';
         }
-        return reactions.join(' ');
+        return reactions.join(', ');
     }
 
     function parseReactionsFromInput(text) {
@@ -150,16 +152,8 @@
         if (!trimmed) {
             return null;
         }
-        if (/[\s,;|]/.test(trimmed)) {
-            const list = trimmed.split(/[\s,;|]+/).map((s) => s.trim()).filter(Boolean);
-            return list.length ? list : null;
-        }
-        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-            const seg = new Intl.Segmenter('ru', { granularity: 'grapheme' });
-            const list = [...seg.segment(trimmed)].map((s) => s.segment).filter(Boolean);
-            return list.length ? list : null;
-        }
-        return [...trimmed];
+        const list = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+        return list.length ? list : null;
     }
 
     function showReactionsStatus(message, type) {
@@ -592,34 +586,12 @@
         });
     }
 
-    async function detectAimsidFromTab() {
-        const tab = await getActiveTeamsTab();
-        if (!tab) {
-            showConnectionStatus('Откройте вкладку VK Teams / WorkSpace', 'error');
-            return;
+    function detectAimsidFromTab() {
+        const aimsidEl = document.getElementById('customAimsid');
+        if (aimsidEl) {
+            aimsidEl.value = PRESET_AIMSID_VALUE;
         }
-        try {
-            const response = await new Promise((resolve, reject) => {
-                chrome.tabs.sendMessage(tab.id, { action: 'getDetectedAimsid' }, (res) => {
-                    if (chrome.runtime.lastError) {
-                        reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                        resolve(res);
-                    }
-                });
-            });
-            if (response && response.success && response.aimsid) {
-                const aimsidEl = document.getElementById('customAimsid');
-                if (aimsidEl) {
-                    aimsidEl.value = response.aimsid;
-                }
-                showConnectionStatus('✅ AIMSID подставлен — нажмите «Сохранить подключение»', 'success');
-            } else {
-                showConnectionStatus('AIMSID не найден на странице. Вставьте вручную из cookies.', 'error');
-            }
-        } catch (e) {
-            showConnectionStatus('Не удалось прочитать вкладку: ' + (e.message || e), 'error');
-        }
+        showConnectionStatus('✅ AIMSID вставлен — нажмите «Сохранить подключение»', 'success');
     }
 
     function saveConnectionSettings() {
