@@ -26,6 +26,7 @@
     "https://*.workspace.vk.ru/*",
     "https://myteam.mail.ru/*",
     "https://*.myteam.mail.ru/*",
+    "https://*.bizml.ru/*",
     "https://generativelanguage.googleapis.com/*",
     "http://localhost:11434/*",
     "https://*/*"
@@ -48,8 +49,11 @@
         "https://workspace.vk.ru/*",
         "https://*.workspace.vk.ru/*",
         "https://myteam.mail.ru/*",
-        "https://*.myteam.mail.ru/*"
+        "https://*.myteam.mail.ru/*",
+        "https://*.bizml.ru/*"
       ],
+      "all_frames": true,
+      "match_about_blank": true,
       "js": [
         "ai-provider.js",
         "modules/call-recording/audio-mixer.js",

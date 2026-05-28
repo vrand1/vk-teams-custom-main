@@ -1043,6 +1043,96 @@
         }
     }
 
+    const QUICK_MENU_SELECTORS = [
+        '.im-quick-menu-block',
+        '[class*="quick-menu-block"]',
+        '[class*="QuickMenuBlock"]',
+        '[class*="quickMenuBlock"]',
+        '[class*="message-actions"]',
+        '[class*="MessageActions"]',
+        '[data-testid*="quick-menu"]',
+        '[data-testid*="message-actions"]'
+    ];
+
+    const MESSAGE_ROOT_SELECTORS = '.imMessage, .im-message, [class*="imMessage"], [class*="ImMessage"]';
+
+    function queryAllDeep(selector, root = document) {
+        const results = [];
+        const seen = new Set();
+
+        const collect = (node) => {
+            if (!node || !node.querySelectorAll) {
+                return;
+            }
+            try {
+                node.querySelectorAll(selector).forEach((el) => {
+                    if (!seen.has(el)) {
+                        seen.add(el);
+                        results.push(el);
+                    }
+                });
+            } catch (e) {}
+            try {
+                node.querySelectorAll('*').forEach((child) => {
+                    if (child.shadowRoot) {
+                        collect(child.shadowRoot);
+                    }
+                });
+            } catch (e) {}
+        };
+
+        collect(root);
+        return results;
+    }
+
+    function findQuickMenuBlock(messageElement) {
+        for (const selector of QUICK_MENU_SELECTORS) {
+            const block = messageElement.querySelector(selector);
+            if (block) {
+                return block;
+            }
+        }
+        return null;
+    }
+
+    function resolveMessageElement(node) {
+        if (!node || node.nodeType !== 1) {
+            return null;
+        }
+        if (node.matches && node.matches(MESSAGE_ROOT_SELECTORS)) {
+            return node;
+        }
+        if (node.closest) {
+            const root = node.closest(MESSAGE_ROOT_SELECTORS);
+            if (root) {
+                return root;
+            }
+        }
+        if (node.hasAttribute('data-arch-id') && node.hasAttribute('data-parent-chat-sn')) {
+            return node;
+        }
+        return null;
+    }
+
+    function findMessageElements() {
+        const seen = new Set();
+        const messages = [];
+
+        const add = (el) => {
+            const messageElement = resolveMessageElement(el);
+            if (!messageElement || seen.has(messageElement)) {
+                return;
+            }
+            seen.add(messageElement);
+            messages.push(messageElement);
+        };
+
+        document.querySelectorAll('.imMessage, .im-message').forEach(add);
+        queryAllDeep('[data-arch-id][data-parent-chat-sn]').forEach(add);
+
+        return messages;
+    }
+
     /**
      * Add reaction button to a message
      */
@@ -1058,11 +1148,13 @@
             return;
         }
 
-        // Find the quick menu block container
-        const quickMenuBlock = messageElement.querySelector('.im-quick-menu-block');
+        let quickMenuBlock = findQuickMenuBlock(messageElement);
         if (!quickMenuBlock) {
-            // Quick menu block not found - this is normal for system messages, old messages, etc.
-            return;
+            quickMenuBlock = document.createElement('div');
+            quickMenuBlock.className = 'vkteams-custom-quick-menu-fallback';
+            quickMenuBlock.style.cssText = 'display:inline-flex;align-items:center;gap:2px;margin-left:4px;';
+            const anchor = messageElement.querySelector('[class*="bubble"]') || messageElement;
+            anchor.appendChild(quickMenuBlock);
         }
 
         // Create button styled like native quick menu items
@@ -1201,10 +1293,12 @@
      * Process all messages
      */
     function processMessages() {
-        const messages = document.querySelectorAll('.imMessage, .im-message');
-        console.log('[VK Teams Custom Reactions] Found messages:', messages.length);
+        const messages = findMessageElements();
+        if (messages.length) {
+            console.log('[VK Teams Custom Reactions] Found messages:', messages.length, 'frame:', window.location.href);
+        }
 
-        messages.forEach(messageElement => {
+        messages.forEach((messageElement) => {
             addReactionButton(messageElement);
         });
     }
@@ -1321,20 +1415,26 @@
         `;
         document.head.appendChild(style);
 
-        // Process existing messages
+        // Process existing messages (retry — messenger iframe may mount after shell)
         processMessages();
+        [1500, 4000, 8000].forEach((delay) => {
+            setTimeout(processMessages, delay);
+        });
 
         // Watch for new messages
         const observer = new MutationObserver(() => {
             processMessages();
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
+        const observeTarget = document.body || document.documentElement;
+        if (observeTarget) {
+            observer.observe(observeTarget, {
+                childList: true,
+                subtree: true
+            });
+        }
 
-        console.log('[VK Teams Custom Reactions] Initialized successfully');
+        console.log('[VK Teams Custom Reactions] Initialized successfully', 'frame:', window.location.href);
 
         // Initialize Call Recording
         initCallRecording();

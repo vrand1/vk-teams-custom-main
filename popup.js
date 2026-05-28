@@ -44,6 +44,9 @@
             if (h === 'myteam.mail.ru' || h.endsWith('.myteam.mail.ru')) {
                 return true;
             }
+            if (h.endsWith('.bizml.ru')) {
+                return true;
+            }
             return false;
         } catch (e) {
             return false;
@@ -79,6 +82,7 @@
                 'https://*.workspace.vk.ru/*',
                 'https://myteam.mail.ru/*',
                 'https://*.myteam.mail.ru/*',
+                'https://*.bizml.ru/*',
                 '*://teams.your-organization.com/*',
                 '*://*.teams.your-organization.com/*',
                 '*://webim.teams.your-organization.com/*',
@@ -86,7 +90,8 @@
                 '*://workspace.vk.ru/*',
                 '*://*.workspace.vk.ru/*',
                 '*://myteam.mail.ru/*',
-                '*://*.myteam.mail.ru/*'
+                '*://*.myteam.mail.ru/*',
+                '*://*.bizml.ru/*'
             ];
             for (const pattern of patterns) {
                 try {
