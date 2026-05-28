@@ -46,15 +46,38 @@ cd ..\scripts
 
 (один раз: `chrome://extensions` → загрузить папку репозитория → **Активировать** в попапе).
 
-## Сборка установщика (опционально)
+## Сборка .exe (готовый продукт для коллег)
 
-```bash
-npm install --save-dev electron-builder
+Один раз на машине разработчика (нужен [Node.js](https://nodejs.org/) 18+):
+
+```powershell
+cd electron-shell
+npm install
+npm run dist
 ```
 
-Добавьте в `package.json` секцию `build` и команду `dist` — см. [electron-builder](https://www.electron.build/).
+В папке `electron-shell\dist\` появятся:
 
-Иконку и имя приложения задайте в `build.win` / `build.mac`.
+| Файл | Назначение |
+|------|------------|
+| `VK-Teams-Custom-1.0.0-portable.exe` | Один файл — запустил и работает, без установки |
+| `VK-Teams-Custom-1.0.0-setup.exe` | Установщик (ярлык, папка в Program Files) |
+| `win-unpacked\` | Распакованная версия для отладки |
+
+**Перед сборкой** (по желанию) положите в корень репозитория `connection.defaults.json` с вашим RAPI и AIMSID-шаблоном — он попадёт внутрь exe. Иначе подставится `connection.defaults.example.json`.
+
+Коллегам Node.js не нужен: отдаёте portable или setup.
+
+Другой URL мессенджера при запуске (on-prem):
+
+```powershell
+$env:VK_WORKSPACE_URL="https://webim.teams.example.com/"
+.\dist\VK-Teams-Custom-1.0.0-portable.exe
+```
+
+Если сборка падает на `Cannot create symbolic link` — в `package.json` уже отключена подпись (`signAndEditExecutable: false`). При других ошибках запустите PowerShell **от администратора** или включите «Режим разработчика» в Windows.
+
+Иконку приложения (256×256) можно положить в `electron-shell\build\icon.png` и добавить в `package.json` → `build.win.icon`.
 
 ## Ограничения
 

@@ -4,6 +4,7 @@ node_modules/
 # Electron shell build artifacts
 electron-shell/node_modules/
 electron-shell/.ext-build/
+electron-shell/dist/
 
 # Local connection settings (copy from connection.defaults.example.json)
 connection.defaults.json

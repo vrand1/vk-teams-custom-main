@@ -4,11 +4,62 @@
   "description": "Desktop shell for VK WorkSpace with vk-teams-custom extension baked in",
   "private": true,
   "main": "main.js",
+  "author": "",
   "scripts": {
     "start": "electron .",
-    "start:url": "electron ."
+    "pack:extension": "node -e \"require('./prepare-extension').prepare()\"",
+    "predist": "npm run pack:extension",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable",
+    "dist:installer": "electron-builder --win nsis"
   },
   "devDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.vkteams.custom",
+    "productName": "VK Teams Custom",
+    "copyright": "Copyright © 2026",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "prepare-extension.js",
+      "inject-reactions.js",
+      "electron-background-stub.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".ext-build",
+        "to": "vk-teams-extension"
+      }
+    ],
+    "asar": true,
+    "forceCodeSigning": false,
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "VK-Teams-Custom-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "VK-Teams-Custom-${version}-setup.exe"
+    }
   }
 }

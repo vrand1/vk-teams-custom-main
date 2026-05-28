@@ -494,6 +494,129 @@
             });
         });
     }
+    let appearanceSelectedAccent = 'lilac';
+
+    function showAppearanceStatus(message, type) {
+        const el = document.getElementById('appearanceStatusMessage');
+        if (!el) {
+            return;
+        }
+        el.textContent = message;
+        el.className = 'status-message ' + (type || '');
+        if (type === 'success') {
+            setTimeout(() => {
+                el.className = 'status-message';
+                el.textContent = '';
+            }, 3000);
+        }
+    }
+
+    function updateAppearanceScaleLabel() {
+        const slider = document.getElementById('appearanceUiScale');
+        const label = document.getElementById('appearanceScaleLabel');
+        if (slider && label) {
+            label.textContent = slider.value + '%';
+        }
+    }
+
+    function setAppearanceAccentUi(accent) {
+        appearanceSelectedAccent = accent;
+        document.querySelectorAll('.accent-swatch').forEach((btn) => {
+            btn.classList.toggle('selected', btn.getAttribute('data-accent') === accent);
+        });
+    }
+
+    function readAppearanceForm() {
+        const themeInput = document.querySelector('input[name="appearanceTheme"]:checked');
+        const scaleEl = document.getElementById('appearanceUiScale');
+        const enabledEl = document.getElementById('appearanceEnabled');
+        return {
+            appearanceEnabled: enabledEl ? enabledEl.checked : true,
+            appearanceTheme: themeInput ? themeInput.value : 'system',
+            appearanceAccent: appearanceSelectedAccent,
+            appearanceUiScale: scaleEl ? Number(scaleEl.value) : 100
+        };
+    }
+
+    function fillAppearanceForm(settings) {
+        const enabledEl = document.getElementById('appearanceEnabled');
+        if (enabledEl) {
+            enabledEl.checked = settings.appearanceEnabled !== false;
+        }
+        document.querySelectorAll('input[name="appearanceTheme"]').forEach((input) => {
+            input.checked = input.value === settings.appearanceTheme;
+        });
+        setAppearanceAccentUi(settings.appearanceAccent || 'lilac');
+        const scaleEl = document.getElementById('appearanceUiScale');
+        if (scaleEl) {
+            scaleEl.value = String(settings.appearanceUiScale || 100);
+        }
+        updateAppearanceScaleLabel();
+    }
+
+    async function loadAppearanceSettings() {
+        try {
+            let settings;
+            if (window.VKTeamsAppearanceStorage) {
+                settings = await window.VKTeamsAppearanceStorage.read();
+            } else {
+                const result = await new Promise((resolve) => {
+                    chrome.storage.local.get(
+                        ['appearanceEnabled', 'appearanceTheme', 'appearanceAccent', 'appearanceUiScale'],
+                        resolve
+                    );
+                });
+                settings = Object.assign(
+                    {
+                        appearanceEnabled: true,
+                        appearanceTheme: 'system',
+                        appearanceAccent: 'lilac',
+                        appearanceUiScale: 100
+                    },
+                    result
+                );
+            }
+            fillAppearanceForm(settings);
+        } catch (err) {
+            showAppearanceStatus('Не удалось загрузить оформление', 'error');
+        }
+    }
+
+    function notifyTabsAppearance(settings) {
+        getAllTeamsTabs().then((tabs) => {
+            tabs.forEach((tab) => {
+                chrome.tabs.sendMessage(tab.id, {
+                    action: 'reloadAppearance',
+                    settings: settings
+                }).catch(() => {});
+            });
+        });
+    }
+
+    async function saveAppearanceSettings() {
+        const settings = readAppearanceForm();
+        try {
+            let saved = settings;
+            if (window.VKTeamsAppearanceStorage) {
+                saved = await window.VKTeamsAppearanceStorage.write(settings);
+            } else {
+                await new Promise((resolve, reject) => {
+                    chrome.storage.local.set(settings, () => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                            return;
+                        }
+                        resolve();
+                    });
+                });
+            }
+            notifyTabsAppearance(saved);
+            showAppearanceStatus('Оформление сохранено', 'success');
+        } catch (err) {
+            showAppearanceStatus('Ошибка: ' + err.message, 'error');
+        }
+    }
+
     let sidebarLinksCache = [];
     let editingSidebarLinkId = null;
 
@@ -1152,6 +1275,21 @@
 
         loadReactionSets();
         loadSidebarLinks();
+        loadAppearanceSettings();
+
+        const saveAppearanceBtn = document.getElementById('saveAppearanceButton');
+        if (saveAppearanceBtn) {
+            saveAppearanceBtn.addEventListener('click', saveAppearanceSettings);
+        }
+        const appearanceScale = document.getElementById('appearanceUiScale');
+        if (appearanceScale) {
+            appearanceScale.addEventListener('input', updateAppearanceScaleLabel);
+        }
+        document.querySelectorAll('.accent-swatch').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                setAppearanceAccentUi(btn.getAttribute('data-accent'));
+            });
+        });
 
         const addSidebarLinkBtn = document.getElementById('addSidebarLinkButton');
         if (addSidebarLinkBtn) {

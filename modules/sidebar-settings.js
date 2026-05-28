@@ -8,6 +8,7 @@
     const LINK_MARKER = 'data-vkteams-sidebar-link';
     const DELEGATE_MARK = 'data-vkteams-click-delegate';
     const LINK_BTN_PREFIX = 'vkteams-sidebar-link-';
+    const BOOT_MARK = 'data-vkteams-sidebar-boot';
 
     let cachedSidebarLinks = [];
 
@@ -116,6 +117,25 @@
             return;
         }
         chrome.storage.local.get(['customSidebarLinks'], (result) => {
+            if (!('customSidebarLinks' in result)) {
+                const defaults =
+                    window.VKTeamsSidebarLinksStorage &&
+                    window.VKTeamsSidebarLinksStorage.DEFAULTS
+                        ? window.VKTeamsSidebarLinksStorage.sanitize(
+                              window.VKTeamsSidebarLinksStorage.DEFAULTS
+                          )
+                        : [
+                              {
+                                  id: 'vkteams-default-erp',
+                                  title: 'ERP',
+                                  url: 'http://192.168.1.42/main',
+                                  emoji: '🔶',
+                                  openInNewTab: true
+                              }
+                          ];
+                chrome.storage.local.set({ customSidebarLinks: defaults }, () => callback(defaults));
+                return;
+            }
             const links = Array.isArray(result.customSidebarLinks) ? result.customSidebarLinks : [];
             callback(links);
         });
@@ -167,7 +187,7 @@
     }
     function findSidebarFooterMount(doc, rail) {
         const vkSettings = findVkNativeSettingsButton(rail);
-        const extensionBtn = doc.getElementById(BTN_ID);
+        const extensionBtn = findFirstInRoots(doc, '#' + BTN_ID);
         const ref = extensionBtn || vkSettings;
         if (!ref || !ref.parentElement) {
             if (vkSettings && vkSettings.parentElement) {
@@ -216,7 +236,7 @@
 
     function removeOrphanLinkButtons(doc, links) {
         const validIds = new Set(links.map((l) => getLinkButtonId(l.id)));
-        doc.querySelectorAll('[' + LINK_MARKER + ']').forEach((el) => {
+        queryAllRoots(doc, '[' + LINK_MARKER + ']').forEach((el) => {
             if (!validIds.has(el.id)) {
                 el.remove();
             }
@@ -225,7 +245,7 @@
 
     function injectCustomLinkButtons(doc, rail, linkTemplate, links) {
         if (!rail || !linkTemplate || !links.length) {
-            doc.querySelectorAll('[' + LINK_MARKER + ']').forEach((el) => el.remove());
+            queryAllRoots(doc, '[' + LINK_MARKER + ']').forEach((el) => el.remove());
             return;
         }
 
@@ -238,6 +258,7 @@
         }
 
         const container = anchor.parentElement;
+        dedupeOurSidebarControls(doc);
         removeOrphanLinkButtons(doc, links);
 
         for (let i = links.length - 1; i >= 0; i--) {
@@ -246,13 +267,15 @@
                 continue;
             }
             const btnId = getLinkButtonId(link.id);
-            let btn = doc.getElementById(btnId);
+            let btn = findFirstInRoots(doc, '#' + btnId);
             if (!btn) {
                 btn = createLinkButton(link, linkTemplate, doc);
                 insertBeforeSibling(container, btn, anchor);
             } else {
                 updateLinkButton(btn, link, doc);
-                if (btn.parentElement !== container || btn.nextElementSibling !== anchor) {
+                if (btn.parentElement !== container) {
+                    insertBeforeSibling(container, btn, anchor);
+                } else if (btn.nextElementSibling !== anchor) {
                     insertBeforeSibling(container, btn, anchor);
                 }
             }
@@ -292,7 +315,7 @@
         return docs;
     }
 
-    function forEachRoot(callback) {
+    function forEachRoot(doc, callback) {
         const seen = new Set();
         const walk = (root) => {
             if (!root || seen.has(root)) {
@@ -310,7 +333,43 @@
                 /* ignore */
             }
         };
-        getAccessibleDocuments().forEach((doc) => walk(doc));
+        if (doc) {
+            walk(doc);
+        }
+    }
+
+    function queryAllRoots(doc, selector) {
+        const found = [];
+        forEachRoot(doc, (root) => {
+            try {
+                root.querySelectorAll(selector).forEach((el) => found.push(el));
+            } catch (e) {
+                /* ignore */
+            }
+        });
+        return found;
+    }
+
+    function findFirstInRoots(doc, selector) {
+        const all = queryAllRoots(doc, selector);
+        return all.length ? all[0] : null;
+    }
+
+    function dedupeOurSidebarControls(doc) {
+        const settingsBtns = queryAllRoots(doc, '#' + BTN_ID);
+        for (let i = 1; i < settingsBtns.length; i++) {
+            settingsBtns[i].remove();
+        }
+
+        const seenLinks = new Set();
+        queryAllRoots(doc, '[' + LINK_MARKER + ']').forEach((el) => {
+            const key = el.getAttribute('data-link-id') || el.id || '';
+            if (!key || seenLinks.has(key)) {
+                el.remove();
+                return;
+            }
+            seenLinks.add(key);
+        });
     }
 
     function cleanupLegacy(doc) {
@@ -496,7 +555,7 @@
         if (native) {
             return native;
         }
-        const extensionBtn = doc.getElementById(BTN_ID);
+        const extensionBtn = findFirstInRoots(doc, '#' + BTN_ID);
         if (extensionBtn) {
             return extensionBtn;
         }
@@ -644,7 +703,8 @@
     }
 
     function injectSettingsButton(doc, rail, template) {
-        const existing = doc.getElementById(BTN_ID);
+        dedupeOurSidebarControls(doc);
+        const existing = findFirstInRoots(doc, '#' + BTN_ID);
         if (existing) {
             if (!hasOurSidebarIcon(existing)) {
                 applySidebarIcon(existing, doc);
@@ -698,7 +758,7 @@
     function injectSidebar(doc, links) {
         let rail = null;
         let settingsTemplate = null;
-        forEachRoot((root) => {
+        forEachRoot(doc, (root) => {
             if (rail) {
                 return;
             }
@@ -713,6 +773,7 @@
             return false;
         }
 
+        dedupeOurSidebarControls(doc);
         injectSettingsButton(doc, rail, settingsTemplate);
         const linkTemplate = findLinkButtonTemplate(rail, doc) || settingsTemplate;
         injectCustomLinkButtons(doc, rail, linkTemplate, links || cachedSidebarLinks);
@@ -726,8 +787,16 @@
         });
     }
 
+    function sidebarNeedsSync(doc) {
+        const settingsBtn = findFirstInRoots(doc, '#' + BTN_ID);
+        if (!settingsBtn || !hasOurSidebarIcon(settingsBtn)) {
+            return true;
+        }
+        return cachedSidebarLinks.some((link) => !findFirstInRoots(doc, '#' + getLinkButtonId(link.id)));
+    }
+
     function scheduleSidebarRetries(doc, attempt) {
-        if (doc.getElementById(BTN_ID)) {
+        if (findFirstInRoots(doc, '#' + BTN_ID)) {
             return;
         }
         if (attempt >= 30) {
@@ -738,6 +807,14 @@
     }
 
     function bootDocument(doc) {
+        if (!doc || !doc.documentElement) {
+            return;
+        }
+        if (doc.documentElement.getAttribute(BOOT_MARK)) {
+            return;
+        }
+        doc.documentElement.setAttribute(BOOT_MARK, '1');
+
         cleanupLegacy(doc);
         installClickDelegation(doc);
         refreshSidebar(doc);
@@ -750,13 +827,11 @@
             }
             reinjectTimer = setTimeout(() => {
                 reinjectTimer = null;
-                const settingsBtn = doc.getElementById(BTN_ID);
-                const needSettings = !settingsBtn || !hasOurSidebarIcon(settingsBtn);
-                const needLinks = cachedSidebarLinks.some((link) => !doc.getElementById(getLinkButtonId(link.id)));
-                if (needSettings || needLinks) {
+                dedupeOurSidebarControls(doc);
+                if (sidebarNeedsSync(doc)) {
                     refreshSidebar(doc);
                 }
-            }, 300);
+            }, 500);
         });
         if (doc.body) {
             observer.observe(doc.body, { childList: true, subtree: true });
@@ -768,12 +843,13 @@
             return;
         }
 
-        getAccessibleDocuments().forEach((doc) => bootDocument(doc));
+        bootDocument(document);
 
         if (window.VKTeamsSidebarLinksStorage) {
             window.VKTeamsSidebarLinksStorage.onChanged((links) => {
                 cachedSidebarLinks = links;
-                getAccessibleDocuments().forEach((doc) => injectSidebar(doc, links));
+                dedupeOurSidebarControls(document);
+                injectSidebar(document, links);
             });
         } else {
             chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -784,7 +860,8 @@
                     ? changes.customSidebarLinks.newValue
                     : [];
                 cachedSidebarLinks = links;
-                getAccessibleDocuments().forEach((doc) => injectSidebar(doc, links));
+                dedupeOurSidebarControls(document);
+                injectSidebar(document, links);
             });
         }
 

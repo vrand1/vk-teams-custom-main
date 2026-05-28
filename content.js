@@ -376,6 +376,27 @@
             sendResponse({ success: true });
             return false;
         }
+
+        if (message.action === 'reloadAppearance') {
+            if (window.VKTeamsAppearanceApplier) {
+                const run = message.settings
+                    ? Promise.resolve().then(() => {
+                        const s = window.VKTeamsAppearanceStorage
+                            ? window.VKTeamsAppearanceStorage.sanitize(message.settings)
+                            : message.settings;
+                        window.VKTeamsAppearanceApplier.applySettings(s);
+                    })
+                    : window.VKTeamsAppearanceApplier.loadAndApply();
+                Promise.resolve(run).then(() => {
+                    sendResponse({ success: true });
+                }).catch((err) => {
+                    sendResponse({ success: false, error: err && err.message ? err.message : String(err) });
+                });
+                return true;
+            }
+            sendResponse({ success: false, error: 'Appearance applier not loaded' });
+            return false;
+        }
     });
     const AIMSID_PATTERN = /\d{3}\.\d+\.\d+:[a-zA-Z0-9.@_-]+/;
 
@@ -1227,6 +1248,9 @@
 
         await loadConnectionConfig();
         await loadCustomReactions();
+        if (window.VKTeamsAppearanceApplier) {
+            window.VKTeamsAppearanceApplier.init();
+        }
         installPageConsoleBridge();
 
         if (window.VKTeamsAI && window.VKTeamsAI.AIManager) {

@@ -4,6 +4,16 @@
     const STORAGE_KEY = 'customSidebarLinks';
     const MAX_LINKS = 15;
 
+    const DEFAULT_SIDEBAR_LINKS = [
+        {
+            id: 'vkteams-default-erp',
+            title: 'ERP',
+            url: 'http://192.168.1.42/main',
+            emoji: '🔶',
+            openInNewTab: true
+        }
+    ];
+
     function storageGet() {
         return new Promise((resolve) => {
             chrome.storage.local.get([STORAGE_KEY], (result) => {
@@ -43,8 +53,17 @@
             }));
     }
 
+    async function ensureDefaultSidebarLinks() {
+        const seeded = sanitizeLinks(DEFAULT_SIDEBAR_LINKS);
+        await storageSet(seeded);
+        return seeded;
+    }
+
     async function readSidebarLinks() {
         const result = await storageGet();
+        if (!(STORAGE_KEY in result)) {
+            return ensureDefaultSidebarLinks();
+        }
         return sanitizeLinks(result[STORAGE_KEY]);
     }
 
@@ -68,9 +87,11 @@
     global.VKTeamsSidebarLinksStorage = {
         KEY: STORAGE_KEY,
         MAX_LINKS: MAX_LINKS,
+        DEFAULTS: DEFAULT_SIDEBAR_LINKS,
         read: readSidebarLinks,
         write: writeSidebarLinks,
         onChanged: onSidebarLinksChanged,
-        sanitize: sanitizeLinks
+        sanitize: sanitizeLinks,
+        ensureDefaults: ensureDefaultSidebarLinks
     };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

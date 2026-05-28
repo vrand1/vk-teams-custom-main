@@ -75,21 +75,21 @@
 
 ---
 
-## 5. Свой Electron-лаунчер (для разработчиков)
+## 5. Свой .exe (Electron, расширение внутри)
 
-Если нужен полностью свой брендированный клиент:
+Готовый десктоп без Chrome и без «Загрузить распакованное»:
 
-```js
-const { app, session } = require('electron');
-const path = require('path');
-
-app.whenReady().then(async () => {
-  await session.defaultSession.loadExtension(path.join(__dirname, '..'));
-  // затем BrowserWindow с https://app.workspace.vk.ru/
-});
+```powershell
+cd electron-shell
+npm install
+npm run dist
 ```
 
-Поддерживается **не весь** Chrome Extensions API (см. [документацию Electron](https://www.electronjs.org/docs/latest/api/extensions)). Manifest V3 и content scripts обычно работают, но нужны тесты.
+Запуск для пользователя: **`electron-shell\dist\VK-Teams-Custom-1.0.0-portable.exe`** (или setup.exe).
+
+Внутри уже вшито расширение и (при сборке) `connection.defaults.json`. Подробности: [electron-shell/README.md](electron-shell/README.md).
+
+Поддерживается **не весь** Chrome Extensions API ([документация Electron](https://www.electronjs.org/docs/latest/api/extensions)) — тестируйте запись звонков и AI отдельно.
 
 ---
 

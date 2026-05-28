@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 
 const { prepare } = require('./prepare-extension');
-const EXTENSION_DIR = prepare();
 const INJECT_FILE = path.join(__dirname, 'inject-reactions.js');
 const START_URL = process.env.VK_WORKSPACE_URL || 'https://myteam.mail.ru/webim/';
 const SHELL_UA_MARKER = 'VKTeamsCustomShell/1.0';
@@ -22,6 +21,14 @@ const IN_APP_HOST_SUFFIXES = [
 let mainWindow = null;
 let injectSource = null;
 let injectTimer = null;
+let extensionDir = null;
+
+function resolveExtensionDir() {
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, 'vk-teams-extension');
+    }
+    return prepare();
+}
 
 function getInjectSource() {
     if (!injectSource) {
@@ -58,7 +65,7 @@ async function ensureExtensionLoaded() {
     const ses = session.defaultSession;
     try {
         if (typeof ses.loadExtension === 'function') {
-            const ext = await ses.loadExtension(EXTENSION_DIR, { allowFileAccess: true });
+            const ext = await ses.loadExtension(extensionDir, { allowFileAccess: true });
             console.log('[shell] Extension loaded (optional):', ext.name);
             return ext;
         }
@@ -173,6 +180,10 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+    extensionDir = resolveExtensionDir();
+    if (!fs.existsSync(extensionDir)) {
+        console.error('[shell] Extension folder missing:', extensionDir);
+    }
     await ensureExtensionLoaded();
     createWindow();
 });

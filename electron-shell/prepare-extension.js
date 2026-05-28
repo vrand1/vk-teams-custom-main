@@ -44,6 +44,13 @@ function prepare() {
     manifest.background = { service_worker: 'electron-background-stub.js' };
     fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
+    const defaultsSrc = fs.existsSync(path.join(ROOT, 'connection.defaults.json'))
+        ? path.join(ROOT, 'connection.defaults.json')
+        : path.join(ROOT, 'connection.defaults.example.json');
+    if (fs.existsSync(defaultsSrc)) {
+        fs.copyFileSync(defaultsSrc, path.join(OUT, 'connection.defaults.json'));
+    }
+
     return OUT;
 }
 

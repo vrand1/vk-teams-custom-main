@@ -717,6 +717,52 @@
             border-left: 2px solid var(--accent);
         }
 
+        .appearance-theme-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .appearance-theme-row label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .accent-swatches {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 6px;
+        }
+
+        .accent-swatch {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            padding: 0;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+        }
+
+        .accent-swatch.selected {
+            border-color: var(--text);
+            box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+        }
+
+        .appearance-scale-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .appearance-scale-row input[type="range"] {
+            flex: 1;
+        }
+
         .transcription-header {
             font-size: 11px;
             font-weight: 500;
@@ -1168,6 +1214,58 @@
 
     <div class="content tab-content" id="settings-tab">
         <div class="settings-section">
+            <div class="section-header" data-section="appearance-settings">
+                <span class="section-toggle">▶</span>
+                <span class="section-title">Оформление</span>
+            </div>
+            <div class="section-content collapsed" id="appearance-settings">
+                <div class="hint" style="margin-bottom: 12px;">
+                    Подключает те же CSS-темы, что и десктоп (<code>im-theme-violet</code>, <code>im-theme-dark_blue</code> и т.д.). После сохранения обновите вкладку мессенджера (F5), если цвет не сменился сразу.
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="appearanceEnabled" checked>
+                        <span class="form-label">Применять оформление в мессенджере</span>
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Тема оформления</label>
+                    <div class="appearance-theme-row">
+                        <label><input type="radio" name="appearanceTheme" value="light"> Светлая</label>
+                        <label><input type="radio" name="appearanceTheme" value="dark"> Тёмная</label>
+                        <label><input type="radio" name="appearanceTheme" value="system" checked> Системная</label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Цвет оформления</label>
+                    <div class="accent-swatches" id="appearanceAccentSwatches">
+                        <button type="button" class="accent-swatch" data-accent="blue" title="Синяя" style="background:#2688eb;"></button>
+                        <button type="button" class="accent-swatch" data-accent="turquoise" title="Бирюзовая" style="background:#2bb6d6;"></button>
+                        <button type="button" class="accent-swatch selected" data-accent="lilac" title="Сиреневая" style="background:#735ce6;"></button>
+                        <button type="button" class="accent-swatch" data-accent="orange" title="Оранжевая" style="background:#ff9e00;"></button>
+                        <button type="button" class="accent-swatch" data-accent="pink" title="Розовая" style="background:#e03dac;"></button>
+                        <button type="button" class="accent-swatch" data-accent="red" title="Красная" style="background:#e64646;"></button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Масштаб: <span id="appearanceScaleLabel">100%</span> (по умолчанию)</label>
+                    <div class="appearance-scale-row">
+                        <span style="font-size: 11px; color: var(--text-muted);">80%</span>
+                        <input type="range" id="appearanceUiScale" min="80" max="140" step="5" value="100">
+                        <span style="font-size: 11px; color: var(--text-muted);">140%</span>
+                    </div>
+                </div>
+
+                <button type="button" class="save-button" id="saveAppearanceButton">Сохранить оформление</button>
+                <div class="status-message" id="appearanceStatusMessage" style="margin-top: 10px;"></div>
+            </div>
+        </div>
+
+        <div class="settings-section">
             <div class="section-header" data-section="reaction-presets">
                 <span class="section-toggle">▶</span>
                 <span class="section-title">Наборы реакций</span>
@@ -1255,6 +1353,8 @@
     <script src="modules/reaction-storage.js"></script>
     <script src="modules/connection-storage.js"></script>
     <script src="modules/sidebar-links-storage.js"></script>
+    <script src="modules/appearance-storage.js"></script>
+    <script src="modules/appearance-presets.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
