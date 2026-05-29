@@ -56,6 +56,7 @@
       "match_about_blank": true,
       "js": [
         "modules/reaction-storage.js",
+        "modules/all-emojis.js",
         "modules/connection-storage.js",
         "modules/sidebar-links-storage.js",
         "modules/appearance-storage.js",

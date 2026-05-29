@@ -460,6 +460,41 @@
             setTimeout(() => notification.remove(), 300);
         }, 3000);
     }
+    function normalizeRapiMsgId(messageId) {
+        const raw = String(messageId).trim();
+        if (!/^\d+$/.test(raw)) {
+            return messageId;
+        }
+        const asNumber = Number(raw);
+        return Number.isSafeInteger(asNumber) ? asNumber : raw;
+    }
+
+    function buildReactionAddBody(reqId, messageId, chatId, reactions, reaction) {
+        const msgId = normalizeRapiMsgId(messageId);
+        const params = {
+            chatId: chatId,
+            reactions: reactions,
+            customReactions: CUSTOM_REACTIONS,
+            reaction: reaction
+        };
+        if (typeof msgId === 'number') {
+            return JSON.stringify({
+                reqId: reqId,
+                aimsid: aimsid,
+                params: Object.assign({ msgId: msgId }, params)
+            });
+        }
+        const msgIdLiteral = /^\d+$/.test(String(msgId).trim()) ? String(msgId).trim() : JSON.stringify(msgId);
+        return '{"reqId":' + JSON.stringify(reqId)
+            + ',"aimsid":' + JSON.stringify(aimsid)
+            + ',"params":{"msgId":' + msgIdLiteral
+            + ',"chatId":' + JSON.stringify(chatId)
+            + ',"reactions":' + JSON.stringify(reactions)
+            + ',"customReactions":' + JSON.stringify(CUSTOM_REACTIONS)
+            + ',"reaction":' + JSON.stringify(reaction)
+            + '}}';
+    }
+
     function setReaction(messageId, chatId, reaction) {
         if (!aimsid) {
             aimsid = getAIMSID();
@@ -470,7 +505,8 @@
         }
 
         const reqId = generateUUID();
-        const jsonBody = `{"reqId":"${reqId}","aimsid":"${aimsid}","params":{"msgId":${messageId},"chatId":"${chatId}","reactions":${JSON.stringify(CUSTOM_REACTIONS)},"reaction":"${reaction}"}}`;
+        const allEmojis = (window.VKTeamsAllEmojis && window.VKTeamsAllEmojis.list) || [];
+        const jsonBody = buildReactionAddBody(reqId, messageId, chatId, allEmojis, reaction);
 
         fetch(`${RAPI_URL}/api/v${RAPI_API_VERSION}/rapi/reaction/add`, {
             method: 'POST',
